@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
@@ -129,12 +129,12 @@
             </div>
             <div class="mb-3">
               <label class="form-label">Vendor</label>
-              <input class="form-control mono" id="browserVendor" placeholder="roxy / generic" />
-              <div class="form-text">用于选择同步协议（可先填 generic）。</div>
+              <input class="form-control mono" id="browserVendor" placeholder="roxy / virtualbrowser / generic" />
+              <div class="form-text">用于选择指纹浏览器协议：RoxyBrowser 填 <code>roxy</code>；VirtualBrowser 填 <code>virtualbrowser</code>。</div>
             </div>
             <div class="mb-3">
               <label class="form-label">Access Key（可选）</label>
-              <input class="form-control mono" id="browserKey" placeholder="指纹浏览器侧 API key" />
+              <input class="form-control mono" id="browserKey" placeholder="Roxy填token / VirtualBrowser填API Key" />
             </div>
             <div class="mb-3">
               <label class="form-label">窗口池上限（Browser Pool Limit）</label>
@@ -167,12 +167,13 @@
             </div>
             <div class="mb-3">
               <label class="form-label">空间ID</label>
-              <input class="form-control mono" id="spaceId" />
+              <input class="form-control mono" id="spaceId" placeholder="Roxy填workspaceId数字；VirtualBrowser填default或分组ID" />
+              <div class="form-text">RoxyBrowser 需填 workspaceId（纯数字）；VirtualBrowser 可填 <code>default</code> 或分组ID。</div>
             </div>
             <div class="mb-3">
               <label class="form-label">项目ID（可选）</label>
               <input class="form-control mono" id="spaceProjectIds" placeholder="10,11" />
-              <div class="form-text">用于 RoxyBrowser `/browser/list_v3` 的 `projectIds` 过滤参数；多个用英文逗号分隔。</div>
+              <div class="form-text">用于 RoxyBrowser `/browser/list_v3` 的 `projectIds` 过滤参数；多个用英文逗号分隔（VirtualBrowser 可留空）。</div>
             </div>
           </div>
           <div class="modal-footer">

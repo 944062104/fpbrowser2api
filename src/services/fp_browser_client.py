@@ -55,6 +55,18 @@ def _normalize_browser_args(args: Optional[List[str]]) -> List[str]:
     return normalized
 
 
+def _is_virtualbrowser(vendor: str) -> bool:
+    """判断是否为 VirtualBrowser（支持 virtualbrowser, vb, virtual）。"""
+    v = str(vendor or "").strip().lower().replace("-", "").replace("_", "")
+    return v in ("virtualbrowser", "vb", "virtual")
+
+
+def _is_roxy(vendor: str) -> bool:
+    """判断是否为 RoxyBrowser（默认，包含 roxy, roxybrowser, generic）。"""
+    v = str(vendor or "").strip().lower()
+    return v in ("roxy", "roxybrowser", "generic") or not v
+
+
 class RoxyRateLimiter:
     """RoxyBrowser API 速率限制：每分钟最多 200 次调用。留余量 180/分钟。"""
 
@@ -122,18 +134,22 @@ class FPBrowserClient:
         space_id: str,
         project_ids: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        # 说明：本项目“同步窗口”当前按 RoxyBrowser 官方接口实现，
-        # 以 `_roxy_get_browser_list_v3` + `_roxy_get_browser_detail` 为准。
         vendor = (vendor or "roxy").strip().lower()
         base_url = (base_url or "").strip().rstrip("/")
         space_id = (space_id or "").strip()
         if not base_url or not space_id:
             return []
 
-        # RoxyBrowser：space_id 对应 workspaceId（int）
-        if vendor not in ("roxy", "roxybrowser", "generic"):
-            # 未来你要接入其他厂商时，再在此处扩展分支
-            raise RuntimeError(f"暂不支持 vendor={vendor} 的同步，请设置为 roxy")
+        if _is_virtualbrowser(vendor):
+            return await self._vb_list_windows(
+                base_url=base_url,
+                token=access_key,
+                space_id=space_id,
+                project_ids=project_ids,
+            )
+
+        if not _is_roxy(vendor):
+            raise RuntimeError(f"暂不支持 vendor={vendor} 的同步，请设置为 roxy 或 virtualbrowser")
 
         try:
             workspace_id = int(space_id)
@@ -154,19 +170,17 @@ class FPBrowserClient:
         base_url: str,
         access_key: Optional[str],
     ) -> List[Dict[str, Any]]:
-        """读取“空间 + 项目列表”（RoxyBrowser：GET /browser/workspace）。
-
-        说明：
-        - 仅用于 UI 展示，只读，不写入本地 DB。
-        - 返回值尽量保持 RoxyBrowser 的 rows 结构：[{id, workspaceName, project_details:[{projectId, projectName}]}]
-        """
+        """读取“空间 + 项目列表”（RoxyBrowser：GET /browser/workspace；VirtualBrowser：GET /api/getGroupList）。"""
         vendor = (vendor or "roxy").strip().lower()
         base_url = (base_url or "").strip().rstrip("/")
         if not base_url:
             return []
 
-        if vendor not in ("roxy", "roxybrowser", "generic"):
-            raise RuntimeError(f"暂不支持 vendor={vendor} 的空间项目列表查询，请设置为 roxy")
+        if _is_virtualbrowser(vendor):
+            return await self._vb_list_workspace_projects(base_url=base_url, token=access_key)
+
+        if not _is_roxy(vendor):
+            raise RuntimeError(f"暂不支持 vendor={vendor} 的空间项目列表查询，请设置为 roxy 或 virtualbrowser")
 
         return await self._roxy_list_workspace_projects(base_url=base_url, token=access_key)
 
@@ -178,21 +192,17 @@ class FPBrowserClient:
         access_key: Optional[str],
         space_id: str,
     ) -> List[Dict[str, Any]]:
-        """读取代理检测渠道（RoxyBrowser：GET /proxy/detect_channel）。
-
-        参考文档：
-        - https://faq.roxybrowser.com/zh/api-documentation/api-endpoint.html#%E8%8E%B7%E5%8F%96%E6%A3%80%E6%B5%8B%E6%B8%A0%E9%81%93
-
-        注意：文档标注“请求参数：无”，但实际本地 RoxyBrowser 服务会校验
-        workspaceId；这里按当前空间 space_id 传入。
-        """
+        """读取代理检测渠道（RoxyBrowser：GET /proxy/detect_channel）。"""
         vendor = (vendor or "roxy").strip().lower()
         base_url = (base_url or "").strip().rstrip("/")
         space_id = (space_id or "").strip()
         if not base_url or not space_id:
             return []
 
-        if vendor not in ("roxy", "roxybrowser", "generic"):
+        if _is_virtualbrowser(vendor):
+            return []
+
+        if not _is_roxy(vendor):
             raise RuntimeError(f"暂不支持 vendor={vendor} 的代理检测渠道查询，请设置为 roxy")
 
         try:
@@ -224,21 +234,28 @@ class FPBrowserClient:
         headless: bool = False,
         pure_mode: bool = True,
     ) -> Dict[str, Any]:
-        """打开指纹浏览器窗口，并返回自动化连接信息（主要是 CDP endpoint：data.http / data.ws）。
-
-        约定：
-        - 对于 RoxyBrowser：space_id = workspaceId（纯数字），window_key = dirId
-        - 返回结构与 RoxyBrowser 接口一致：{code, msg, data:{http, driver, ws,...}}
-        """
+        """打开指纹浏览器窗口，并返回自动化连接信息（主要是 CDP endpoint：data.http / data.ws）。"""
         vendor = (vendor or "roxy").strip().lower()
         base_url = (base_url or "").strip().rstrip("/")
         space_id = (space_id or "").strip()
         window_key = (window_key or "").strip()
-        if not base_url or not space_id or not window_key:
-            raise RuntimeError("browser_open 参数不足：base_url/space_id/window_key 不能为空")
+        if not base_url or not window_key:
+            raise RuntimeError("browser_open 参数不足：base_url/window_key 不能为空")
 
-        if vendor not in ("roxy", "roxybrowser", "generic"):
-            raise RuntimeError(f"暂不支持 vendor={vendor} 的 browser_open，请设置为 roxy")
+        if _is_virtualbrowser(vendor):
+            return await self._vb_open_browser(
+                base_url=base_url,
+                token=access_key,
+                window_key=window_key,
+                args=args,
+                headless=headless,
+            )
+
+        if not _is_roxy(vendor):
+            raise RuntimeError(f"暂不支持 vendor={vendor} 的 browser_open，请设置为 roxy 或 virtualbrowser")
+
+        if not space_id:
+            raise RuntimeError("browser_open 参数不足：Roxy 模式下 space_id 不能为空")
 
         try:
             workspace_id = int(space_id)
@@ -248,8 +265,6 @@ class FPBrowserClient:
         for arg in _SUPPRESS_PASSWORD_PROMPT_ARGS:
             _append_unique_arg(args, arg)
         if headless:
-            ##args.append("--headless=old") 容易触发机器人
-            ##args.append("--disable-gpu") 容易触发机器人
             _append_unique_arg(args, "--disable-software-rasterizer")
             _append_unique_arg(args, "--disable-animations")
             _append_unique_arg(args, "--disable-threaded-animation")
@@ -260,14 +275,6 @@ class FPBrowserClient:
             _append_unique_arg(args, "--blink-settings=imagesEnabled=false")
         else:
             if pure_mode:
-                ##args.append("--disable-software-rasterizer")
-                ##args.append("--disable-animations")
-                ##args.append("--disable-threaded-animation")
-                ##args.append("--disable-threaded-scrolling")
-                ##args.append("--mute-audio")
-                ##args.append("--disable-extensions")
-                ##args.append("--autoplay-policy=user-gesture-required")
-                ##_append_unique_arg(args, "--blink-settings=imagesEnabled=false")
                 pass
 
         return await self._roxy_open_browser(
@@ -287,16 +294,25 @@ class FPBrowserClient:
         base_url: str,
         access_key: Optional[str],
         window_key: str,
+        space_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """关闭指纹浏览器窗口（RoxyBrowser：POST /browser/close）。"""
+        """关闭指纹浏览器窗口（RoxyBrowser：POST /browser/close；VirtualBrowser：POST /api/stopBrowser）。"""
         vendor = (vendor or "roxy").strip().lower()
         base_url = (base_url or "").strip().rstrip("/")
         window_key = (window_key or "").strip()
         if not base_url or not window_key:
             raise RuntimeError("browser_close 参数不足：base_url/window_key 不能为空")
 
-        if vendor not in ("roxy", "roxybrowser", "generic"):
-            raise RuntimeError(f"暂不支持 vendor={vendor} 的 browser_close，请设置为 roxy")
+        if _is_virtualbrowser(vendor):
+            return await self._vb_close_browser(
+                base_url=base_url,
+                token=access_key,
+                window_key=window_key,
+            )
+
+        if not _is_roxy(vendor):
+            raise RuntimeError(f"暂不支持 vendor={vendor} 的 browser_close，请设置为 roxy 或 virtualbrowser")
+
         return await self._roxy_close_browser(
             base_url=base_url,
             token=access_key,
@@ -312,20 +328,23 @@ class FPBrowserClient:
         space_id: str,
         window_key: str,
     ) -> Dict[str, Any]:
-        """窗口随机指纹（RoxyBrowser：POST /browser/random_env）。
-
-        参考文档：
-        - https://faq.roxybrowser.com/zh/api-documentation/api-endpoint.html#%E7%AA%97%E5%8F%A3%E9%9A%8F%E6%9C%BA%E6%8C%87%E7%BA%B9
-        """
+        """窗口随机指纹（RoxyBrowser：POST /browser/random_env；VirtualBrowser：POST /api/randomizeFingerprint）。"""
         vendor = (vendor or "roxy").strip().lower()
         base_url = (base_url or "").strip().rstrip("/")
         space_id = (space_id or "").strip()
         window_key = (window_key or "").strip()
-        if not base_url or not space_id or not window_key:
-            raise RuntimeError("browser_random_env 参数不足：base_url/space_id/window_key 不能为空")
+        if not base_url or not window_key:
+            raise RuntimeError("browser_random_env 参数不足：base_url/window_key 不能为空")
 
-        if vendor not in ("roxy", "roxybrowser", "generic"):
-            raise RuntimeError(f"暂不支持 vendor={vendor} 的 browser_random_env，请设置为 roxy")
+        if _is_virtualbrowser(vendor):
+            return await self._vb_random_env(
+                base_url=base_url,
+                token=access_key,
+                window_key=window_key,
+            )
+
+        if not _is_roxy(vendor):
+            raise RuntimeError(f"暂不支持 vendor={vendor} 的 browser_random_env，请设置为 roxy 或 virtualbrowser")
 
         try:
             workspace_id = int(space_id)
@@ -348,11 +367,7 @@ class FPBrowserClient:
         window_keys: List[str],
         partial: bool = True,
     ) -> Dict[str, Any]:
-        """清空窗口本地缓存（RoxyBrowser：POST /browser/clear_local_cache）。
-
-        参考文档：
-        - https://faq.roxybrowser.com/zh/api-documentation/api-endpoint.html#%E6%B8%85%E7%A9%BA%E7%AA%97%E5%8F%A3%E6%9C%AC%E5%9C%B0%E7%BC%93%E5%AD%98
-        """
+        """清空窗口本地缓存（RoxyBrowser：POST /browser/clear_local_cache；VirtualBrowser：POST /api/clearCache）。"""
         vendor = (vendor or "roxy").strip().lower()
         base_url = (base_url or "").strip().rstrip("/")
         keys = [str(x or "").strip() for x in (window_keys or [])]
@@ -360,8 +375,15 @@ class FPBrowserClient:
         if not base_url or not keys:
             raise RuntimeError("browser_clear_local_cache 参数不足：base_url/window_keys 不能为空")
 
-        if vendor not in ("roxy", "roxybrowser", "generic"):
-            raise RuntimeError(f"暂不支持 vendor={vendor} 的 browser_clear_local_cache，请设置为 roxy")
+        if _is_virtualbrowser(vendor):
+            return await self._vb_clear_local_cache(
+                base_url=base_url,
+                token=access_key,
+                window_keys=keys,
+            )
+
+        if not _is_roxy(vendor):
+            raise RuntimeError(f"暂不支持 vendor={vendor} 的 browser_clear_local_cache，请设置为 roxy 或 virtualbrowser")
 
         return await self._roxy_clear_local_cache(
             base_url=base_url,
@@ -379,24 +401,24 @@ class FPBrowserClient:
         space_id: str,
         window_keys: List[str],
     ) -> Dict[str, Any]:
-        """清空窗口服务器缓存（RoxyBrowser：POST /browser/clear_server_cache）。
-
-        参考文档：
-        - https://faq.roxybrowser.com/zh/api-documentation/api-endpoint.html#%E6%B8%85%E7%A9%BA%E7%AA%97%E5%8F%A3%E6%9C%8D%E5%8A%A1%E5%99%A8%E7%BC%93%E5%AD%98
-        """
+        """清空窗口服务器缓存（RoxyBrowser：POST /browser/clear_server_cache）。"""
         vendor = (vendor or "roxy").strip().lower()
         base_url = (base_url or "").strip().rstrip("/")
         keys = [str(x or "").strip() for x in (window_keys or [])]
         keys = [x for x in keys if x]
         if not base_url or not keys:
             raise RuntimeError("browser_clear_server_cache 参数不足：base_url/window_keys 不能为空")
+
+        if _is_virtualbrowser(vendor):
+            return {"code": 0, "msg": "VirtualBrowser 无服务器缓存"}
+
+        if not _is_roxy(vendor):
+            raise RuntimeError(f"暂不支持 vendor={vendor} 的 browser_clear_server_cache，请设置为 roxy")
+
         try:
             workspace_id = int(str(space_id or "").strip())
         except Exception:
             raise RuntimeError("RoxyBrowser 的 space_id 请填写 workspaceId（纯数字）")
-
-        if vendor not in ("roxy", "roxybrowser", "generic"):
-            raise RuntimeError(f"暂不支持 vendor={vendor} 的 browser_clear_server_cache，请设置为 roxy")
 
         return await self._roxy_clear_server_cache(
             base_url=base_url, token=access_key, workspace_id=workspace_id, dir_ids=keys
@@ -412,22 +434,18 @@ class FPBrowserClient:
         window_key: str,
         data: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """修改浏览器窗口（RoxyBrowser：POST /browser/mdf）。
-
-        说明：
-        - 会强制注入 workspaceId/dirId（以 space_id/window_key 为准），其余字段透传给指纹浏览器。
-
-        参考文档：
-        - https://faq.roxybrowser.com/zh/api-documentation/api-endpoint.html#%E4%BF%AE%E6%94%B9%E6%B5%8F%E8%A7%88%E5%99%A8%E7%AA%97%E5%8F%A3
-        """
+        """修改浏览器窗口（RoxyBrowser：POST /browser/mdf）。"""
         vendor = (vendor or "roxy").strip().lower()
         base_url = (base_url or "").strip().rstrip("/")
         space_id = (space_id or "").strip()
         window_key = (window_key or "").strip()
-        if not base_url or not space_id or not window_key:
-            raise RuntimeError("browser_mdf 参数不足：base_url/space_id/window_key 不能为空")
+        if not base_url or not window_key:
+            raise RuntimeError("browser_mdf 参数不足：base_url/window_key 不能为空")
 
-        if vendor not in ("roxy", "roxybrowser", "generic"):
+        if _is_virtualbrowser(vendor):
+            return {"code": 0, "msg": "ok"}
+
+        if not _is_roxy(vendor):
             raise RuntimeError(f"暂不支持 vendor={vendor} 的 browser_mdf，请设置为 roxy")
 
         try:
@@ -449,23 +467,22 @@ class FPBrowserClient:
         space_id: str,
         window_key: str,
     ) -> Dict[str, Any]:
-        """获取窗口明细（RoxyBrowser：GET /browser/detail）。
-
-        主要用途：在调用 /browser/mdf 做局部更新（例如只改 proxyInfo）时，
-        先读取当前窗口信息并保留关键字段（如 windowPlatformList），避免某些 Roxy 版本把未传字段“清空”。
-
-        参考文档：
-        - https://faq.roxybrowser.com/zh/api-documentation/api-endpoint.html#%E8%8E%B7%E5%8F%96%E6%B5%8F%E8%A7%88%E5%99%A8%E7%AA%97%E5%8F%A3%E6%98%8E%E7%BB%86
-        """
+        """获取窗口明细（RoxyBrowser：GET /browser/detail；VirtualBrowser：GET /api/getBrowserFullParameters）。"""
         vendor = (vendor or "roxy").strip().lower()
         base_url = (base_url or "").strip().rstrip("/")
-        space_id = (space_id or "").strip()
         window_key = (window_key or "").strip()
-        if not base_url or not space_id or not window_key:
-            raise RuntimeError("get_browser_detail 参数不足：base_url/space_id/window_key 不能为空")
+        if not base_url or not window_key:
+            raise RuntimeError("get_browser_detail 参数不足：base_url/window_key 不能为空")
 
-        if vendor not in ("roxy", "roxybrowser", "generic"):
-            raise RuntimeError(f"暂不支持 vendor={vendor} 的 get_browser_detail，请设置为 roxy")
+        if _is_virtualbrowser(vendor):
+            return await self._vb_get_browser_detail(
+                base_url=base_url,
+                token=access_key,
+                window_key=window_key,
+            )
+
+        if not _is_roxy(vendor):
+            raise RuntimeError(f"暂不支持 vendor={vendor} 的 get_browser_detail，请设置为 roxy 或 virtualbrowser")
 
         try:
             workspace_id = int(space_id)
@@ -487,18 +504,17 @@ class FPBrowserClient:
         access_key: Optional[str],
         space_id: str,
     ) -> List[Dict[str, Any]]:
-        """读取代理 IP 列表（RoxyBrowser：GET /proxy/list）。
-
-        参考文档：
-        - https://faq.roxybrowser.com/zh/api-documentation/api-endpoint.html#%E8%8E%B7%E5%8F%96%E4%BB%A3%E7%90%86-ip-%E5%88%97%E8%A1%A8
-        """
+        """读取代理 IP 列表（RoxyBrowser：GET /proxy/list）。"""
         vendor = (vendor or "roxy").strip().lower()
         base_url = (base_url or "").strip().rstrip("/")
         space_id = (space_id or "").strip()
         if not base_url or not space_id:
             return []
 
-        if vendor not in ("roxy", "roxybrowser", "generic"):
+        if _is_virtualbrowser(vendor):
+            return []
+
+        if not _is_roxy(vendor):
             raise RuntimeError(f"暂不支持 vendor={vendor} 的 list_proxies，请设置为 roxy")
 
         try:
@@ -524,7 +540,10 @@ class FPBrowserClient:
         if not base_url or not space_id:
             raise RuntimeError("create_proxy 参数不足：base_url/space_id 不能为空")
 
-        if vendor not in ("roxy", "roxybrowser", "generic"):
+        if _is_virtualbrowser(vendor):
+            return {"code": 0, "msg": "ok"}
+
+        if not _is_roxy(vendor):
             raise RuntimeError(f"暂不支持 vendor={vendor} 的 create_proxy，请设置为 roxy")
 
         try:
@@ -553,7 +572,10 @@ class FPBrowserClient:
         if not base_url or not space_id:
             raise RuntimeError("update_proxy 参数不足：base_url/space_id 不能为空")
 
-        if vendor not in ("roxy", "roxybrowser", "generic"):
+        if _is_virtualbrowser(vendor):
+            return {"code": 0, "msg": "ok"}
+
+        if not _is_roxy(vendor):
             raise RuntimeError(f"暂不支持 vendor={vendor} 的 update_proxy，请设置为 roxy")
 
         try:
@@ -586,7 +608,10 @@ class FPBrowserClient:
         if not base_url or not space_id:
             raise RuntimeError("delete_proxies 参数不足：base_url/space_id 不能为空")
 
-        if vendor not in ("roxy", "roxybrowser", "generic"):
+        if _is_virtualbrowser(vendor):
+            return {"code": 0, "msg": "ok"}
+
+        if not _is_roxy(vendor):
             raise RuntimeError(f"暂不支持 vendor={vendor} 的 delete_proxies，请设置为 roxy")
 
         try:
@@ -618,8 +643,13 @@ class FPBrowserClient:
         space_id = (space_id or "").strip()
         if not base_url or not space_id:
             return []
-        if vendor not in ("roxy", "roxybrowser", "generic"):
+
+        if _is_virtualbrowser(vendor):
+            return await self._vb_list_accounts(base_url=base_url, token=access_key)
+
+        if not _is_roxy(vendor):
             raise RuntimeError(f"暂不支持 vendor={vendor} 的 list_accounts，请设置为 roxy")
+
         try:
             workspace_id = int(space_id)
         except Exception:
@@ -641,8 +671,13 @@ class FPBrowserClient:
         space_id = (space_id or "").strip()
         if not base_url or not space_id:
             raise RuntimeError("create_accounts_batch 参数不足：base_url/space_id 不能为空")
-        if vendor not in ("roxy", "roxybrowser", "generic"):
+
+        if _is_virtualbrowser(vendor):
+            return {"code": 0, "msg": "ok"}
+
+        if not _is_roxy(vendor):
             raise RuntimeError(f"暂不支持 vendor={vendor} 的 create_accounts_batch，请设置为 roxy")
+
         try:
             workspace_id = int(space_id)
         except Exception:
@@ -668,8 +703,13 @@ class FPBrowserClient:
         space_id = (space_id or "").strip()
         if not base_url or not space_id:
             raise RuntimeError("update_account 参数不足：base_url/space_id 不能为空")
-        if vendor not in ("roxy", "roxybrowser", "generic"):
+
+        if _is_virtualbrowser(vendor):
+            return {"code": 0, "msg": "ok"}
+
+        if not _is_roxy(vendor):
             raise RuntimeError(f"暂不支持 vendor={vendor} 的 update_account，请设置为 roxy")
+
         try:
             workspace_id = int(space_id)
         except Exception:
@@ -693,8 +733,13 @@ class FPBrowserClient:
         space_id = (space_id or "").strip()
         if not base_url or not space_id:
             raise RuntimeError("delete_accounts 参数不足：base_url/space_id 不能为空")
-        if vendor not in ("roxy", "roxybrowser", "generic"):
+
+        if _is_virtualbrowser(vendor):
+            return {"code": 0, "msg": "ok"}
+
+        if not _is_roxy(vendor):
             raise RuntimeError(f"暂不支持 vendor={vendor} 的 delete_accounts，请设置为 roxy")
+
         try:
             workspace_id = int(space_id)
         except Exception:
@@ -716,22 +761,34 @@ class FPBrowserClient:
         window_keys: List[str],
         is_soft_deleted: bool = False,
     ) -> Dict[str, Any]:
-        """删除浏览器窗口（RoxyBrowser：POST /browser/delete，支持批量）。"""
+        """删除浏览器窗口（RoxyBrowser：POST /browser/delete；VirtualBrowser：POST /api/deleteBrowser）。"""
         vendor = (vendor or "roxy").strip().lower()
         base_url = (base_url or "").strip().rstrip("/")
         space_id = (space_id or "").strip()
-        if not base_url or not space_id:
-            raise RuntimeError("delete_windows 参数不足：base_url/space_id 不能为空")
-        if vendor not in ("roxy", "roxybrowser", "generic"):
-            raise RuntimeError(f"暂不支持 vendor={vendor} 的 delete_windows，请设置为 roxy")
-        try:
-            workspace_id = int(space_id)
-        except Exception:
-            raise RuntimeError("RoxyBrowser 的 space_id 请填写 workspaceId（纯数字）")
+        if not base_url:
+            raise RuntimeError("delete_windows 参数不足：base_url 不能为空")
 
         dir_ids = [str(x or "").strip() for x in (window_keys or []) if str(x or "").strip()]
         if not dir_ids:
             raise RuntimeError("delete_windows 参数不足：window_keys 不能为空")
+
+        if _is_virtualbrowser(vendor):
+            return await self._vb_delete_windows(
+                base_url=base_url,
+                token=access_key,
+                window_keys=dir_ids,
+            )
+
+        if not _is_roxy(vendor):
+            raise RuntimeError(f"暂不支持 vendor={vendor} 的 delete_windows，请设置为 roxy 或 virtualbrowser")
+
+        if not space_id:
+            raise RuntimeError("delete_windows 参数不足：Roxy 模式下 space_id 不能为空")
+
+        try:
+            workspace_id = int(space_id)
+        except Exception:
+            raise RuntimeError("RoxyBrowser 的 space_id 请填写 workspaceId（纯数字）")
 
         payload = {
             "workspaceId": int(workspace_id),
@@ -757,8 +814,13 @@ class FPBrowserClient:
         space_id = (space_id or "").strip()
         if not base_url or not space_id:
             return []
-        if vendor not in ("roxy", "roxybrowser", "generic"):
+
+        if _is_virtualbrowser(vendor):
+            return []
+
+        if not _is_roxy(vendor):
             raise RuntimeError(f"暂不支持 vendor={vendor} 的 find_accounts_by_keys，请设置为 roxy")
+
         try:
             workspace_id = int(space_id)
         except Exception:
@@ -813,16 +875,7 @@ class FPBrowserClient:
         access_key: Optional[str],
         window_key: str,
     ) -> bool:
-        """查询窗口是否已打开（RoxyBrowser：GET /browser/connection_info）。
-
-        参考文档：
-        - 已打开窗口进程信息：/browser/connection_info
-          https://faq.roxybrowser.com/zh/api-documentation/api-endpoint.html#%E5%B7%B2%E6%89%93%E5%BC%80%E7%AA%97%E5%8F%A3%E8%BF%9B%E7%A8%8B%E4%BF%A1%E6%81%AF
-
-        返回：
-        - True：窗口已打开（能查到对应 dirId 的连接信息）
-        - False：未打开或查询失败
-        """
+        """查询窗口是否已打开。"""
         info = await self.get_open_window_connection_info(
             vendor=vendor,
             base_url=base_url,
@@ -846,8 +899,15 @@ class FPBrowserClient:
         if not base_url or not window_key:
             raise RuntimeError("get_open_window_connection_info 参数不足：base_url/window_key 不能为空")
 
-        if vendor not in ("roxy", "roxybrowser", "generic"):
-            raise RuntimeError(f"暂不支持 vendor={vendor} 的 connection_info，请设置为 roxy")
+        if _is_virtualbrowser(vendor):
+            return await self._vb_get_open_connection_info(
+                base_url=base_url,
+                token=access_key,
+                window_key=window_key,
+            )
+
+        if not _is_roxy(vendor):
+            raise RuntimeError(f"暂不支持 vendor={vendor} 的 connection_info，请设置为 roxy 或 virtualbrowser")
 
         rsp = await self._roxy_get(
             base_url,
@@ -876,13 +936,21 @@ class FPBrowserClient:
         access_key: Optional[str],
         window_keys: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """批量查询已打开窗口进程信息（RoxyBrowser：GET /browser/connection_info）。"""
+        """批量查询已打开窗口进程信息。"""
         vendor = (vendor or "roxy").strip().lower()
         base_url = (base_url or "").strip().rstrip("/")
         if not base_url:
             raise RuntimeError("list_open_window_connection_infos 参数不足：base_url 不能为空")
-        if vendor not in ("roxy", "roxybrowser", "generic"):
-            raise RuntimeError(f"暂不支持 vendor={vendor} 的 connection_info，请设置为 roxy")
+
+        if _is_virtualbrowser(vendor):
+            return await self._vb_list_open_connection_infos(
+                base_url=base_url,
+                token=access_key,
+                window_keys=window_keys,
+            )
+
+        if not _is_roxy(vendor):
+            raise RuntimeError(f"暂不支持 vendor={vendor} 的 connection_info，请设置为 roxy 或 virtualbrowser")
 
         keys = [str(x or "").strip() for x in (window_keys or []) if str(x or "").strip()]
 
@@ -912,6 +980,364 @@ class FPBrowserClient:
             if isinstance(data, list):
                 all_results.extend(x for x in data if isinstance(x, dict))
         return all_results
+
+    # -------------------- VirtualBrowser --------------------
+    def _vb_headers(self, token: Optional[str]) -> Dict[str, str]:
+        h: Dict[str, str] = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        tok = str(token or "").strip()
+        if tok:
+            h["api-key"] = tok
+        return h
+
+    async def _vb_get(
+        self,
+        base_url: str,
+        token: Optional[str],
+        path: str,
+        params: Optional[Dict[str, Any]] = None,
+        timeout_seconds: float = 30.0,
+    ) -> Dict[str, Any]:
+        url = base_url.rstrip("/") + "/" + path.lstrip("/")
+        headers = self._vb_headers(token)
+        clean_params = {k: v for k, v in (params or {}).items() if v is not None and v != ""}
+        async with self._client() as client:
+            try:
+                resp = await client.get(url, headers=headers, params=clean_params, timeout=timeout_seconds)
+                resp.raise_for_status()
+                return resp.json()
+            except httpx.HTTPStatusError as e:
+                try:
+                    return e.response.json()
+                except Exception:
+                    raise RuntimeError(f"VirtualBrowser 请求失败 [{e.response.status_code}]：{e.response.text}") from e
+            except Exception as e:
+                raise RuntimeError(f"VirtualBrowser 连接失败 ({url})：{e}") from e
+
+    async def _vb_post(
+        self,
+        base_url: str,
+        token: Optional[str],
+        path: str,
+        data: Optional[Dict[str, Any]] = None,
+        timeout_seconds: float = 60.0,
+    ) -> Dict[str, Any]:
+        url = base_url.rstrip("/") + "/" + path.lstrip("/")
+        headers = self._vb_headers(token)
+        async with self._client() as client:
+            try:
+                resp = await client.post(url, headers=headers, json=data or {}, timeout=timeout_seconds)
+                resp.raise_for_status()
+                return resp.json()
+            except httpx.HTTPStatusError as e:
+                try:
+                    return e.response.json()
+                except Exception:
+                    raise RuntimeError(f"VirtualBrowser 请求失败 [{e.response.status_code}]：{e.response.text}") from e
+            except Exception as e:
+                raise RuntimeError(f"VirtualBrowser 连接失败 ({url})：{e}") from e
+
+    async def _vb_list_windows(
+        self,
+        *,
+        base_url: str,
+        token: Optional[str],
+        space_id: str,
+        project_ids: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        rsp: Dict[str, Any] = {}
+        try:
+            rsp = await self._vb_get(base_url, token, "/api/getBrowserList", timeout_seconds=30.0)
+        except Exception:
+            try:
+                rsp = await self._vb_post(base_url, token, "/api/getBrowserList", {}, timeout_seconds=30.0)
+            except Exception as e:
+                raise RuntimeError(f"VirtualBrowser /api/getBrowserList 请求失败：{e}")
+
+        if rsp.get("success") is False:
+            err = rsp.get("error") or rsp.get("msg") or "未知错误"
+            raise RuntimeError(f"VirtualBrowser /api/getBrowserList 失败：{err}")
+
+        raw_data = rsp.get("data")
+        rows: List[Dict[str, Any]] = []
+        if isinstance(raw_data, list):
+            rows = raw_data
+        elif isinstance(raw_data, dict):
+            rows = raw_data.get("list") or raw_data.get("items") or raw_data.get("rows") or []
+
+        result: List[Dict[str, Any]] = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            wid = str(r.get("id") if r.get("id") is not None else r.get("browserId") or r.get("uuid") or "").strip()
+            if not wid:
+                continue
+
+            gid = str(r.get("groupId") if r.get("groupId") is not None else r.get("group_id") or "").strip()
+            sid = (space_id or "").strip()
+            if sid and sid.lower() not in ("all", "default", "0", "*", ""):
+                if gid and gid != sid:
+                    continue
+
+            wname = str(r.get("name") or r.get("browserName") or r.get("remark") or f"Browser-{wid}").strip()
+
+            proxy_info = r.get("proxy") or r.get("proxyInfo") or {}
+            proxy_addr = None
+            proxy_country = None
+            if isinstance(proxy_info, dict):
+                host = proxy_info.get("host") or proxy_info.get("ip") or proxy_info.get("proxyHost")
+                port = proxy_info.get("port") or proxy_info.get("proxyPort")
+                if host and port:
+                    proxy_addr = f"{host}:{port}"
+                elif host:
+                    proxy_addr = str(host)
+                proxy_country = proxy_info.get("country") or proxy_info.get("lastCountry")
+            elif isinstance(proxy_info, str) and proxy_info.strip():
+                proxy_addr = proxy_info.strip()
+
+            platform_user = str(r.get("account") or r.get("username") or r.get("platformUserName") or "").strip() or None
+
+            sort_num = None
+            if wid.isdigit():
+                try:
+                    sort_num = int(wid)
+                except Exception:
+                    pass
+
+            result.append({
+                "window_key": wid,
+                "window_sort_num": sort_num,
+                "window_name": wname,
+                "platform_account_id": None,
+                "platform_account": platform_user,
+                "platform_url": None,
+                "proxy_addr": proxy_addr,
+                "proxy_country": str(proxy_country).strip() if proxy_country else None,
+                "enabled": True,
+                "deleted": False,
+                "raw": r,
+            })
+
+        return result
+
+    async def _vb_open_browser(
+        self,
+        *,
+        base_url: str,
+        token: Optional[str],
+        window_key: str,
+        args: Optional[List[str]] = None,
+        headless: bool = False,
+    ) -> Dict[str, Any]:
+        wid = int(window_key) if str(window_key).isdigit() else window_key
+        payload: Dict[str, Any] = {"id": wid}
+        if args:
+            payload["args"] = args
+        if headless:
+            payload["headless"] = True
+
+        rsp = await self._vb_post(base_url, token, "/api/launchBrowser", payload, timeout_seconds=60.0)
+        if rsp.get("success") is False:
+            err = rsp.get("error") or rsp.get("msg") or "启动失败"
+            return {"code": -1, "msg": f"VirtualBrowser 启动窗口失败: {err}", "data": {}}
+
+        data = rsp.get("data") if isinstance(rsp.get("data"), dict) else {}
+        port = data.get("debuggingPort") or data.get("port")
+        http_endpoint = str(data.get("http") or "").strip()
+        ws_endpoint = str(data.get("ws") or data.get("webSocketDebuggerUrl") or "").strip()
+
+        if not http_endpoint and port:
+            http_endpoint = f"127.0.0.1:{port}"
+        if not ws_endpoint and port:
+            ws_endpoint = f"ws://127.0.0.1:{port}"
+
+        return {
+            "code": 0,
+            "msg": "success",
+            "data": {
+                "http": http_endpoint,
+                "ws": ws_endpoint,
+                "port": port,
+                "debuggingPort": port,
+                "dirId": str(window_key),
+            },
+        }
+
+    async def _vb_close_browser(
+        self,
+        *,
+        base_url: str,
+        token: Optional[str],
+        window_key: str,
+    ) -> Dict[str, Any]:
+        wid = int(window_key) if str(window_key).isdigit() else window_key
+        rsp = await self._vb_post(base_url, token, "/api/stopBrowser", {"id": wid}, timeout_seconds=30.0)
+        if rsp.get("success") is False:
+            err = rsp.get("error") or rsp.get("msg") or "关闭失败"
+            return {"code": -1, "msg": f"VirtualBrowser 关闭窗口失败: {err}"}
+        return {"code": 0, "msg": "success"}
+
+    async def _vb_get_open_connection_info(
+        self,
+        *,
+        base_url: str,
+        token: Optional[str],
+        window_key: str,
+    ) -> Optional[Dict[str, Any]]:
+        try:
+            rsp = await self._vb_get(base_url, token, "/api/getBrowserRunningList", timeout_seconds=10.0)
+            if rsp.get("success", True):
+                raw = rsp.get("data")
+                rows = raw if isinstance(raw, list) else (raw.get("list") if isinstance(raw, dict) else [])
+                for it in (rows or []):
+                    if not isinstance(it, dict):
+                        continue
+                    it_id = str(it.get("id") if it.get("id") is not None else it.get("browserId") or "").strip()
+                    if it_id == str(window_key).strip():
+                        port = it.get("debuggingPort") or it.get("port")
+                        http_ep = str(it.get("http") or (f"127.0.0.1:{port}" if port else "")).strip()
+                        ws_ep = str(it.get("ws") or (f"ws://127.0.0.1:{port}" if port else "")).strip()
+                        return {
+                            "dirId": str(window_key),
+                            "window_key": str(window_key),
+                            "http": http_ep,
+                            "ws": ws_ep,
+                            "port": port,
+                        }
+        except Exception:
+            pass
+
+        try:
+            wid = int(window_key) if str(window_key).isdigit() else window_key
+            rsp = await self._vb_get(base_url, token, "/api/isBrowserRunning", params={"id": wid}, timeout_seconds=10.0)
+            if rsp.get("success") and rsp.get("data") is True:
+                return {"dirId": str(window_key), "window_key": str(window_key)}
+        except Exception:
+            pass
+
+        return None
+
+    async def _vb_list_open_connection_infos(
+        self,
+        *,
+        base_url: str,
+        token: Optional[str],
+        window_keys: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        try:
+            rsp = await self._vb_get(base_url, token, "/api/getBrowserRunningList", timeout_seconds=10.0)
+            raw = rsp.get("data")
+            rows = raw if isinstance(raw, list) else (raw.get("list") if isinstance(raw, dict) else [])
+            results: List[Dict[str, Any]] = []
+            filter_keys = set(str(k).strip() for k in (window_keys or []) if str(k).strip())
+            for it in (rows or []):
+                if not isinstance(it, dict):
+                    continue
+                it_id = str(it.get("id") if it.get("id") is not None else it.get("browserId") or "").strip()
+                if not it_id:
+                    continue
+                if filter_keys and it_id not in filter_keys:
+                    continue
+                port = it.get("debuggingPort") or it.get("port")
+                http_ep = str(it.get("http") or (f"127.0.0.1:{port}" if port else "")).strip()
+                ws_ep = str(it.get("ws") or (f"ws://127.0.0.1:{port}" if port else "")).strip()
+                results.append({
+                    "dirId": it_id,
+                    "window_key": it_id,
+                    "http": http_ep,
+                    "ws": ws_ep,
+                    "port": port,
+                })
+            return results
+        except Exception:
+            return []
+
+    async def _vb_list_workspace_projects(
+        self,
+        *,
+        base_url: str,
+        token: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        try:
+            rsp = await self._vb_get(base_url, token, "/api/getGroupList", timeout_seconds=15.0)
+            raw = rsp.get("data")
+            groups = raw if isinstance(raw, list) else (raw.get("list") if isinstance(raw, dict) else [])
+            project_details = []
+            for g in (groups or []):
+                if isinstance(g, dict):
+                    gid = str(g.get("id") if g.get("id") is not None else "")
+                    gname = str(g.get("name") or f"分组-{gid}")
+                    project_details.append({"projectId": gid, "projectName": gname})
+            return [{
+                "id": "1",
+                "workspaceName": "VirtualBrowser",
+                "project_details": project_details,
+            }]
+        except Exception:
+            return [{
+                "id": "1",
+                "workspaceName": "VirtualBrowser",
+                "project_details": [{"projectId": "default", "projectName": "默认空间"}],
+            }]
+
+    async def _vb_random_env(
+        self,
+        *,
+        base_url: str,
+        token: Optional[str],
+        window_key: str,
+    ) -> Dict[str, Any]:
+        wid = int(window_key) if str(window_key).isdigit() else window_key
+        rsp = await self._vb_post(base_url, token, "/api/randomizeFingerprint", {"id": wid}, timeout_seconds=30.0)
+        return {"code": 0 if rsp.get("success") else -1, "msg": rsp.get("error") or "ok"}
+
+    async def _vb_clear_local_cache(
+        self,
+        *,
+        base_url: str,
+        token: Optional[str],
+        window_keys: List[str],
+    ) -> Dict[str, Any]:
+        for wk in window_keys:
+            wid = int(wk) if str(wk).isdigit() else wk
+            try:
+                await self._vb_post(base_url, token, "/api/clearCache", {"id": wid}, timeout_seconds=15.0)
+            except Exception:
+                pass
+        return {"code": 0, "msg": "ok"}
+
+    async def _vb_delete_windows(
+        self,
+        *,
+        base_url: str,
+        token: Optional[str],
+        window_keys: List[str],
+    ) -> Dict[str, Any]:
+        for wk in window_keys:
+            wid = int(wk) if str(wk).isdigit() else wk
+            try:
+                await self._vb_post(base_url, token, "/api/deleteBrowser", {"id": wid}, timeout_seconds=15.0)
+            except Exception:
+                pass
+        return {"code": 0, "msg": "ok"}
+
+    async def _vb_get_browser_detail(
+        self,
+        *,
+        base_url: str,
+        token: Optional[str],
+        window_key: str,
+    ) -> Dict[str, Any]:
+        wid = int(window_key) if str(window_key).isdigit() else window_key
+        try:
+            rsp = await self._vb_get(base_url, token, "/api/getBrowserFullParameters", params={"id": wid}, timeout_seconds=15.0)
+            if rsp.get("success") and isinstance(rsp.get("data"), dict):
+                return rsp.get("data")
+        except Exception:
+            pass
+        return {}
 
     # -------------------- RoxyBrowser --------------------
     def _roxy_headers(self, token: Optional[str]) -> Dict[str, str]:

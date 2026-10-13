@@ -154,6 +154,27 @@ powershell -ExecutionPolicy Bypass -File .\fpbrowser2api_service.ps1 stop
    - `sora_gen_video`
    - `grok_workflow`
 
+## VirtualBrowser 配置流程
+
+### 1. VirtualBrowser 侧准备
+
+1. 打开并登录 VirtualBrowser（需要专业版/VIP 以使用本地 REST API）。
+2. 在客户端左侧菜单点击「API」，开启本地 API 服务。
+3. 记录本地 API 地址（例如 `http://127.0.0.1:9000`）和 `API Key`。
+4. 创建浏览器环境，配置好代理并登录目标平台（如 Google / 即梦 / ChatGPT）。
+
+### 2. FPBrowser2API 后台配置
+
+1. 在「项目管理」创建本地项目。
+2. 在「浏览器服务器」填写 VirtualBrowser 信息：
+   - `vendor`: `virtualbrowser`（或 `vb`）
+   - `lan_addr`: VirtualBrowser 本地 API 地址（如 `http://127.0.0.1:9000`）
+   - `access_key`: VirtualBrowser 客户端中的 `API Key`
+3. 在「空间」添加空间：
+   - `空间ID`: 填 `default`（同步全部窗口）或指定分组的 `groupId` 数字
+4. 点击「同步窗口」，系统将自动调用 `/api/getBrowserList` 同步窗口列表。
+5. 在「任务类型管理」绑定窗口即可正常调度任务。
+
 ## 运行链路
 
 ```text

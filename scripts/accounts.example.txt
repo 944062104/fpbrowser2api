@@ -1,0 +1,7 @@
+# ChatGPT 账号发货清单示例模板
+# 格式：邮箱----密码----2fa密钥 (每行一条)
+# 支持 # 开头的注释行与空行
+
+demo_user01@example.com----Password123!----6QHRDR752Z72D7KBGOSOMKYDZIFHD5NC
+demo_user02@example.com----SecretPass456!----M3DISNELPX54YD7T3OGEDOD2STTK6T5L
+demo_user03@example.com----SecurePass789!----T7OC7O3WC2R3RFIMG33ZBQSKEGK754O6
