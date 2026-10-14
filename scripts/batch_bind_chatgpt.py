@@ -246,9 +246,12 @@ async def perform_chatgpt_login(
 
 
 # -------------------- FPBrowser2API 同步 --------------------
+DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "fpbrowser.db"
+
+
 def sync_to_fpbrowser2api(
     fpb_url: str = "http://127.0.0.1:8000",
-    db_path: str = r"e:\openProject\fpbrowser2api\data\fpbrowser.db",
+    db_path: Path | str = DEFAULT_DB_PATH,
     space_pk: int = 5,
     task_type_id: int = 6,
 ) -> None:
