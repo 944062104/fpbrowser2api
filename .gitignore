@@ -51,3 +51,5 @@ __pycache__/
 /data/*.db-shm
 /data/*.db-wal
 /scratch/
+/output/
+start_all_services.bat
