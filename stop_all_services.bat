@@ -1,27 +1,14 @@
-@echo off
+﻿@echo off
 setlocal
 chcp 65001 >nul
-title AI号池双服务停止器
+cd /d "%~dp0"
 
-echo ========================================================
-echo   正在停止 VirtualBrowser ^& FPBrowser2API 服务...
-echo ========================================================
-echo.
-
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr /R /C:":9000 .*LISTENING"') do (
-    echo 正在关闭 VirtualBrowser API [PID: %%a]...
-    taskkill /F /PID %%a >nul 2>&1
+set "PY_EXE=python"
+if exist "D:\Program Files\anaconda3\python.exe" (
+    set "PY_EXE=D:\Program Files\anaconda3\python.exe"
+) else if exist "D:\Python313\python.exe" (
+    set "PY_EXE=D:\Python313\python.exe"
 )
 
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr /R /C:":8000 .*LISTENING"') do (
-    echo 正在关闭 FPBrowser2API 网关 [PID: %%a]...
-    taskkill /F /PID %%a >nul 2>&1
-)
-
-taskkill /F /IM "mihomo.exe" >nul 2>&1
-
-echo.
-echo ========================================================
-echo   服务已全部停止。
-echo ========================================================
+"%PY_EXE%" stop_services.py
 ping 127.0.0.1 -n 3 >nul

@@ -12,4 +12,5 @@ selenium
 playwright==1.48.0
 patchright
 Pillow
+psutil>=5.9.0
 

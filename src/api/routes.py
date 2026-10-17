@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -1028,12 +1028,17 @@ async def get_openai_compatible_model(model_id: str, api_key: str = Depends(veri
 
 
 @router.post("/v1/chat/completions")
+@router.post("/v1/chat/completions/responses")
+@router.post("/v1/responses")
+@router.post("/responses")
 async def create_chat_completion(
+    request: Request,
     api_key: str = Depends(verify_api_key_header),
     body: Dict[str, Any] = Body(...),
 ):
-    """OpenAI-compatible Chat Completion endpoint powered by VirtualBrowser ChatGPT Pool."""
+    """OpenAI & Responses API compatible Chat Completion endpoint powered by VirtualBrowser ChatGPT Pool."""
 
+    is_responses_api = "responses" in str(request.url.path).lower()
     model = str((body or {}).get("model") or "gpt-4o").strip()
     if model == "fpbrowser-use":
         return _build_openai_chat_completion(model, "ok")
@@ -1047,11 +1052,18 @@ async def create_chat_completion(
 
     def _msg_text(m: Any) -> str:
         if not isinstance(m, dict):
-            return ""
+            return str(m or "").strip()
         c = m.get("content")
         if isinstance(c, list):
-            return " ".join(str(p.get("text") or "") for p in c if isinstance(p, dict) and p.get("type") == "text").strip()
-        return str(c or "").strip()
+            return " ".join(
+                str(p.get("text") or "")
+                for p in c
+                if isinstance(p, dict) and p.get("type") in ("text", "input_text")
+            ).strip()
+        return str(c or m.get("text") or "").strip()
+
+    input_field = (body or {}).get("input")
+    instructions = str((body or {}).get("instructions") or "").strip()
 
     prompt = ""
     conversation_id = str(body.get("conversation_id") or "").strip()
@@ -1067,8 +1079,18 @@ async def create_chat_completion(
         else:
             lines = [f"[{str(m.get('role') or 'user').capitalize()}]: {_msg_text(m)}" for m in messages if _msg_text(m)]
             prompt = "\n\n".join(lines)
+    elif input_field:
+        if isinstance(input_field, str):
+            prompt = input_field.strip()
+        elif isinstance(input_field, list):
+            prompt = "\n\n".join(_msg_text(item) for item in input_field if _msg_text(item))
     elif body.get("prompt"):
         prompt = str(body.get("prompt")).strip()
+
+    if instructions and prompt:
+        prompt = f"[System Instructions]: {instructions}\n\n{prompt}"
+    elif instructions and not prompt:
+        prompt = instructions
 
     if not prompt:
         if model in OPENAI_COMPAT_VIDEO_MODEL_SET:
@@ -1143,20 +1165,43 @@ async def create_chat_completion(
             step = 6
             for i in range(0, len(reply_text), step):
                 chunk = reply_text[i : i + step]
-                yield f'data: {{"id":"chatcmpl-{task_id}","object":"chat.completion.chunk","created":{now},"model":"{model}","choices":[{{"index":0,"delta":{{"content":{json.dumps(chunk)}}},"finish_reason":null}}]}}\n\n'
+                if is_responses_api:
+                    yield f'event: response.output_text.delta\ndata: {{"type":"response.output_text.delta","delta":{json.dumps(chunk)}}}\n\n'
+                else:
+                    yield f'data: {{"id":"chatcmpl-{task_id}","object":"chat.completion.chunk","created":{now},"model":"{model}","choices":[{{"index":0,"delta":{{"content":{json.dumps(chunk)}}},"finish_reason":null}}]}}\n\n'
                 await asyncio.sleep(0.015)
-            yield f'data: {{"id":"chatcmpl-{task_id}","object":"chat.completion.chunk","created":{now},"model":"{model}","choices":[{{"index":0,"delta":{{}},"finish_reason":"stop"}}]}}\n\n'
+            if is_responses_api:
+                yield f'event: response.completed\ndata: {{"type":"response.completed","response":{{"id":"resp-{task_id}","status":"completed","output_text":{json.dumps(reply_text)}}}}}\n\n'
+            else:
+                yield f'data: {{"id":"chatcmpl-{task_id}","object":"chat.completion.chunk","created":{now},"model":"{model}","choices":[{{"index":0,"delta":{{}},"finish_reason":"stop"}}]}}\n\n'
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
 
     resp_obj = {
-        "id": f"chatcmpl-{task_id}",
-        "object": "chat.completion",
+        "id": f"resp-{task_id}" if is_responses_api else f"chatcmpl-{task_id}",
+        "object": "response" if is_responses_api else "chat.completion",
         "created": now,
+        "created_at": now,
         "model": model,
+        "status": "completed",
         "choices": [{"index": 0, "message": {"role": "assistant", "content": reply_text}, "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": pt + ct},
+        "output": [
+            {
+                "id": f"msg-{task_id}",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": reply_text}],
+            }
+        ],
+        "output_text": reply_text,
+        "usage": {
+            "prompt_tokens": pt,
+            "completion_tokens": ct,
+            "total_tokens": pt + ct,
+            "input_tokens": pt,
+            "output_tokens": ct,
+        },
     }
     if cid:
         resp_obj["conversation_id"] = cid
