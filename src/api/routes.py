@@ -1162,17 +1162,43 @@ async def create_chat_completion(
         from fastapi.responses import StreamingResponse
 
         async def event_generator():
-            step = 6
-            for i in range(0, len(reply_text), step):
-                chunk = reply_text[i : i + step]
-                if is_responses_api:
-                    yield f'event: response.output_text.delta\ndata: {{"type":"response.output_text.delta","delta":{json.dumps(chunk)}}}\n\n'
-                else:
-                    yield f'data: {{"id":"chatcmpl-{task_id}","object":"chat.completion.chunk","created":{now},"model":"{model}","choices":[{{"index":0,"delta":{{"content":{json.dumps(chunk)}}},"finish_reason":null}}]}}\n\n'
-                await asyncio.sleep(0.015)
             if is_responses_api:
-                yield f'event: response.completed\ndata: {{"type":"response.completed","response":{{"id":"resp-{task_id}","status":"completed","output_text":{json.dumps(reply_text)}}}}}\n\n'
+                # Responses API 要求按生命周期发出 item 与 part 注册事件，否则客户端报 OutputTextDelta without active item
+                item_id = f"msg-{task_id}"
+                yield f'event: response.created\ndata: {{"type":"response.created","response":{{"id":"resp-{task_id}","status":"in_progress","model":"{model}","output":[]}}}}\n\n'
+                yield f'event: response.output_item.added\ndata: {{"type":"response.output_item.added","output_index":0,"item":{{"id":"{item_id}","type":"message","status":"in_progress","role":"assistant","content":[]}}}}\n\n'
+                yield f'event: response.content_part.added\ndata: {{"type":"response.content_part.added","output_index":0,"content_index":0,"part":{{"type":"output_text","text":""}}}}\n\n'
+
+                step = 6
+                for i in range(0, len(reply_text), step):
+                    chunk = reply_text[i : i + step]
+                    yield f'event: response.output_text.delta\ndata: {{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":{json.dumps(chunk)}}}\n\n'
+                    await asyncio.sleep(0.015)
+
+                yield f'event: response.output_text.done\ndata: {{"type":"response.output_text.done","output_index":0,"content_index":0,"text":{json.dumps(reply_text)}}}\n\n'
+                yield f'event: response.content_part.done\ndata: {{"type":"response.content_part.done","output_index":0,"content_index":0,"part":{{"type":"output_text","text":{json.dumps(reply_text)}}}}}\n\n'
+                item_done = {
+                    "id": item_id,
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": reply_text}],
+                }
+                yield f'event: response.output_item.done\ndata: {{"type":"response.output_item.done","output_index":0,"item":{json.dumps(item_done)}}}\n\n'
+                resp_done = {
+                    "id": f"resp-{task_id}",
+                    "status": "completed",
+                    "model": model,
+                    "output": [item_done],
+                    "usage": {"input_tokens": pt, "output_tokens": ct, "total_tokens": pt + ct},
+                }
+                yield f'event: response.completed\ndata: {{"type":"response.completed","response":{json.dumps(resp_done)}}}\n\n'
             else:
+                step = 6
+                for i in range(0, len(reply_text), step):
+                    chunk = reply_text[i : i + step]
+                    yield f'data: {{"id":"chatcmpl-{task_id}","object":"chat.completion.chunk","created":{now},"model":"{model}","choices":[{{"index":0,"delta":{{"content":{json.dumps(chunk)}}},"finish_reason":null}}]}}\n\n'
+                    await asyncio.sleep(0.015)
                 yield f'data: {{"id":"chatcmpl-{task_id}","object":"chat.completion.chunk","created":{now},"model":"{model}","choices":[{{"index":0,"delta":{{}},"finish_reason":"stop"}}]}}\n\n'
             yield "data: [DONE]\n\n"
 
