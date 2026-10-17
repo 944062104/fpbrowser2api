@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -109,13 +110,11 @@ class CreateImageGenerationRequest(BaseModel):
     model_config = {"extra": "allow"}
 
 
-OPENAI_COMPAT_VIDEO_MODELS = (
+SORA_VIDEO_MODELS = (
     "seedance-2",
     "seedance-2-fast",
-    "nana-banana-2",
-    "nana-banana-pro",
-    "nana-banana-2-4k",
-    "nana-banana-pro-4k",
+)
+VEO_VIDEO_MODELS = (
     "veo-3-1",
     "veo-omni-flash",
     "veo-omni-flash-video-edit",
@@ -124,30 +123,50 @@ OPENAI_COMPAT_VIDEO_MODELS = (
     "veo-3-1-1080p",
     "veo-omni-flash-1080p",
     "veo-omni-flash-video-edit-1080p",
-    "gpt-image2-1k",
-    "gpt-image2-2k",
-    "gpt-image2-4k",
 )
-OPENAI_COMPAT_VIDEO_MODEL_SET = set(OPENAI_COMPAT_VIDEO_MODELS)
-OPENAI_COMPAT_IMAGE_MODELS = (
+DREAMINA_IMAGE_MODELS = (
     "nana-banana-2",
     "nana-banana-pro",
     "nana-banana-2-4k",
     "nana-banana-pro-4k",
+)
+GPT_IMAGE_MODELS = (
     "gpt-image2-1k",
     "gpt-image2-2k",
     "gpt-image2-4k",
 )
-OPENAI_COMPAT_IMAGE_MODEL_SET = set(OPENAI_COMPAT_IMAGE_MODELS)
-OPENAI_COMPAT_SYNC_IMAGE_MODELS = tuple(f"{model}_sync" for model in OPENAI_COMPAT_IMAGE_MODELS)
-OPENAI_COMPAT_SYNC_IMAGE_MODEL_SET = set(OPENAI_COMPAT_SYNC_IMAGE_MODELS)
 OPENAI_COMPAT_NOOP_MODELS = (
     # 专用于 NewAPI 按次扣费：不创建真实任务，只返回一个合法的
     # OpenAI chat completion 响应，让 NewAPI 完成鉴权、日志和额度扣减。
     "fpbrowser-use",
 )
+GPT_CHAT_COMPAT_ALIASES = (
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4",
+    "gpt-3.5-turbo",
+    "chatgpt-free",
+    "chatgpt",
+)
+
+OPENAI_COMPAT_VIDEO_MODELS = (
+    *SORA_VIDEO_MODELS,
+    *VEO_VIDEO_MODELS,
+    *DREAMINA_IMAGE_MODELS,
+    *GPT_IMAGE_MODELS,
+)
+OPENAI_COMPAT_VIDEO_MODEL_SET = set(OPENAI_COMPAT_VIDEO_MODELS)
+OPENAI_COMPAT_IMAGE_MODELS = (
+    *DREAMINA_IMAGE_MODELS,
+    *GPT_IMAGE_MODELS,
+)
+OPENAI_COMPAT_IMAGE_MODEL_SET = set(OPENAI_COMPAT_IMAGE_MODELS)
+OPENAI_COMPAT_SYNC_IMAGE_MODELS = tuple(f"{model}_sync" for model in OPENAI_COMPAT_IMAGE_MODELS)
+OPENAI_COMPAT_SYNC_IMAGE_MODEL_SET = set(OPENAI_COMPAT_SYNC_IMAGE_MODELS)
 OPENAI_COMPAT_NOOP_MODEL_SET = set(OPENAI_COMPAT_NOOP_MODELS)
-OPENAI_COMPAT_MODEL_SET = OPENAI_COMPAT_VIDEO_MODEL_SET | OPENAI_COMPAT_SYNC_IMAGE_MODEL_SET | OPENAI_COMPAT_NOOP_MODEL_SET
+OPENAI_CHAT_MODELS = GPT_CHAT_COMPAT_ALIASES + ("auto",)
+OPENAI_CHAT_MODEL_SET = set(OPENAI_CHAT_MODELS)
+OPENAI_COMPAT_MODEL_SET = OPENAI_COMPAT_VIDEO_MODEL_SET | OPENAI_COMPAT_SYNC_IMAGE_MODEL_SET | OPENAI_CHAT_MODEL_SET | OPENAI_COMPAT_NOOP_MODEL_SET
 GPT_IMAGE2_VIDEO_MODELS: Dict[str, str] = {
     "gpt-image2-1k": "1k",
     "gpt-image2-2k": "2k",
@@ -370,6 +389,22 @@ def _normalize_video_task_payload(payload: Dict[str, Any], *, require_image_seco
     else:
         raise HTTPException(status_code=400, detail=f"model name is required!!")
     return task_type_code, payload
+
+
+def _clean_chat_reply_text(text: str) -> str:
+    if not text:
+        return ""
+    # Strip ChatGPT private Unicode citation markers: \ue200cite...\ue201 or PUA blocks
+    s = re.sub(r"[\ue200-\ue206][^\ue200-\ue206\n]*[\ue200-\ue206]?", "", text)
+    # Strip orphaned turnXsearchY tokens
+    s = re.sub(r"(?:turn\d+search\d+)+", "", s, flags=re.IGNORECASE)
+    # Strip raw ■cite tokens
+    s = re.sub(r"■cite[^\s\n]*", "", s)
+    # Strip source citations like 【1†source】
+    s = re.sub(r"【\d+†(?:source|来源)】", "", s)
+    # Strip any remaining Private Use Area characters
+    s = re.sub(r"[\ue000-\uf8ff]", "", s)
+    return s.strip()
 
 
 def _build_openai_chat_completion(model: str, content: str) -> Dict[str, Any]:
@@ -900,7 +935,7 @@ async def list_task_types(api_key: str = Depends(verify_api_key_header)):
     return {"success": True, "task_types": [t.model_dump() for t in items]}
 
 @router.get("/v1/task-types-public")
-async def list_task_types(api_key: str = Depends(verify_api_key_header)):
+async def list_task_types_public(api_key: str = Depends(verify_api_key_header)):
     if not db:
         raise HTTPException(status_code=500, detail="db not initialized")
     items = await db.list_task_types_public()
@@ -917,20 +952,66 @@ async def create_task(
 
 @router.get("/v1/models")
 async def list_openai_compatible_models(api_key: str = Depends(verify_api_key_header)):
-    """OpenAI-compatible model list, mainly for NewAPI channel discovery/test."""
+    """OpenAI-compatible model list, dynamically assembled from active task types and live ChatGPT models."""
 
     now = int(time.time())
-    return {
-        "object": "list",
-        "data": [
-            {
-                "id": model,
+    active_handlers: set[str] = set()
+    if db is not None:
+        try:
+            active_handlers = set(await db.list_active_task_type_handlers())
+        except Exception:
+            active_handlers = {"gpt_workflow"}
+    else:
+        active_handlers = {"gpt_workflow"}
+
+    models: List[Dict[str, Any]] = []
+    seen = set()
+
+    def add_model(model_id: str, owned_by: str = "fpbrowser2api"):
+        mid = str(model_id or "").strip()
+        if mid and mid not in seen:
+            seen.add(mid)
+            models.append({
+                "id": mid,
                 "object": "model",
                 "created": now,
-                "owned_by": "fpbrowser2api",
-            }
-            for model in (*OPENAI_COMPAT_VIDEO_MODELS, *OPENAI_COMPAT_SYNC_IMAGE_MODELS, *OPENAI_COMPAT_NOOP_MODELS)
-        ],
+                "owned_by": owned_by,
+            })
+
+    # 1. GPT Workflow: 动态获取实时模型 + 基础别名兼容 + GPT 生图
+    if "gpt_workflow" in active_handlers:
+        from ..services.gpt_task_executor import get_cached_gpt_models
+        live_gpt_models = await get_cached_gpt_models()
+        for item in live_gpt_models:
+            slug = str(item.get("slug") or "").strip()
+            if slug:
+                add_model(slug, owned_by="openai")
+        for alias in GPT_CHAT_COMPAT_ALIASES:
+            add_model(alias, owned_by="openai")
+        for img_model in (*GPT_IMAGE_MODELS, *[f"{m}_sync" for m in GPT_IMAGE_MODELS]):
+            add_model(img_model, owned_by="openai")
+
+    # 2. Veo Workflow
+    if "veo_workflow" in active_handlers:
+        for m in VEO_VIDEO_MODELS:
+            add_model(m, owned_by="google")
+
+    # 3. Sora Video
+    if "sora_gen_video" in active_handlers:
+        for m in SORA_VIDEO_MODELS:
+            add_model(m, owned_by="openai")
+
+    # 4. Dreamina
+    if "dreamina_workflow" in active_handlers:
+        for m in (*DREAMINA_IMAGE_MODELS, *[f"{m}_sync" for m in DREAMINA_IMAGE_MODELS]):
+            add_model(m, owned_by="bytedance")
+
+    # 5. No-op channel test model
+    add_model("fpbrowser-use", owned_by="fpbrowser2api")
+
+    return {
+        "object": "list",
+        "data": models,
     }
 
 
@@ -939,46 +1020,147 @@ async def get_openai_compatible_model(model_id: str, api_key: str = Depends(veri
     """OpenAI-compatible single model lookup."""
 
     model = (model_id or "").strip()
-    if model not in OPENAI_COMPAT_MODEL_SET:
-        raise HTTPException(status_code=404, detail="model not found")
-    return {
-        "id": model,
-        "object": "model",
-        "created": int(time.time()),
-        "owned_by": "fpbrowser2api",
-    }
+    models_resp = await list_openai_compatible_models(api_key=api_key)
+    for m in models_resp.get("data", []):
+        if m.get("id") == model:
+            return m
+    raise HTTPException(status_code=404, detail="model not found")
 
 
 @router.post("/v1/chat/completions")
-async def create_chat_completion_for_newapi_test(
+async def create_chat_completion(
     api_key: str = Depends(verify_api_key_header),
     body: Dict[str, Any] = Body(...),
 ):
-    """Minimal OpenAI chat-compatible endpoint for NewAPI channel tests/charging.
+    """OpenAI-compatible Chat Completion endpoint powered by VirtualBrowser ChatGPT Pool."""
 
-    NewAPI's OpenAI-channel "test" button probes `/v1/chat/completions`.
-    The real video creation endpoint is `/v1/videos`; this endpoint only
-    returns a lightweight success response.
-
-    Special model:
-    - `fpbrowser-use`: no-op charging model for NewAPI. It does not create any
-      real task; NewAPI can configure this model as fixed-price / per-call so
-      every successful request deducts quota.
-    """
-
-    model = str((body or {}).get("model") or "").strip()
+    model = str((body or {}).get("model") or "gpt-4o").strip()
     if model == "fpbrowser-use":
         return _build_openai_chat_completion(model, "ok")
 
-    if model not in OPENAI_COMPAT_VIDEO_MODEL_SET:
-        raise HTTPException(
-            status_code=400,
-            detail=f"model {model or '<empty>'} is not supported by chat test endpoint",
+    messages = (body or {}).get("messages") or []
+    if not messages and model in OPENAI_COMPAT_VIDEO_MODEL_SET:
+        return _build_openai_chat_completion(
+            model,
+            f"fpbrowser2api channel test ok for {model}; use POST /v1/videos to create video tasks.",
         )
-    return _build_openai_chat_completion(
-        model,
-        f"fpbrowser2api channel test ok for {model}; use POST /v1/videos to create video tasks.",
+
+    def _msg_text(m: Any) -> str:
+        if not isinstance(m, dict):
+            return ""
+        c = m.get("content")
+        if isinstance(c, list):
+            return " ".join(str(p.get("text") or "") for p in c if isinstance(p, dict) and p.get("type") == "text").strip()
+        return str(c or "").strip()
+
+    prompt = ""
+    conversation_id = str(body.get("conversation_id") or "").strip()
+    if conversation_id and isinstance(messages, list) and messages:
+        for m in reversed(messages):
+            if isinstance(m, dict) and str(m.get("role") or "").lower() == "user":
+                prompt = _msg_text(m)
+                if prompt:
+                    break
+    elif isinstance(messages, list) and messages:
+        if len(messages) == 1:
+            prompt = _msg_text(messages[0])
+        else:
+            lines = [f"[{str(m.get('role') or 'user').capitalize()}]: {_msg_text(m)}" for m in messages if _msg_text(m)]
+            prompt = "\n\n".join(lines)
+    elif body.get("prompt"):
+        prompt = str(body.get("prompt")).strip()
+
+    if not prompt:
+        if model in OPENAI_COMPAT_VIDEO_MODEL_SET:
+            return _build_openai_chat_completion(
+                model,
+                f"fpbrowser2api channel test ok for {model}; use POST /v1/videos to create video tasks.",
+            )
+        raise HTTPException(status_code=400, detail="messages or prompt is required")
+
+    task_payload = {
+        "workflow_kind": "chat",
+        "prompt": prompt,
+        "model": model,
+        "web_model": model if model in ("gpt-4o", "gpt-4o-mini") else "auto",
+    }
+    if body.get("conversation_id"):
+        task_payload["conversation_id"] = body.get("conversation_id")
+
+    target_window_pk = body.get("window_pk")
+    if conversation_id and not target_window_pk and db:
+        try:
+            async with db._read_conn() as conn:
+                cur = await conn.execute(
+                    """
+                    SELECT window_pk FROM tasks 
+                    WHERE result_json LIKE ? AND status = 'completed' AND task_type_code = 'gpt_workflow'
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (f"%{conversation_id}%",)
+                )
+                row = await cur.fetchone()
+                if row and row[0]:
+                    target_window_pk = int(row[0])
+        except Exception:
+            pass
+
+    created = await _create_task_from_request(
+        CreateTaskRequest(
+            task_type_code="gpt_workflow",
+            json=task_payload,
+            mapping_id=body.get("mapping_id"),
+            window_pk=target_window_pk,
+        )
     )
+    task_id = str(created.get("task_id") or "").strip()
+    if not task_id:
+        return created
+
+    task = await _wait_for_task_final(
+        task_id,
+        timeout_sec=180.0,
+        poll_interval_sec=1.5,
+    )
+    result = task.result if isinstance(task.result, dict) else {}
+    reply_text = str(result.get("text") or result.get("content") or "").strip()
+    if not reply_text and isinstance(result.get("message"), dict):
+        reply_text = str(result["message"].get("content") or "").strip()
+
+    reply_text = _clean_chat_reply_text(reply_text)
+    if not reply_text:
+        reply_text = "（处理完成，未获取到回复内容）"
+
+    cid = str(result.get("conversation_id") or "")
+    stream = bool((body or {}).get("stream"))
+    now = int(time.time())
+    pt, ct = max(1, len(prompt) // 4), max(1, len(reply_text) // 4)
+
+    if stream:
+        from fastapi.responses import StreamingResponse
+
+        async def event_generator():
+            step = 6
+            for i in range(0, len(reply_text), step):
+                chunk = reply_text[i : i + step]
+                yield f'data: {{"id":"chatcmpl-{task_id}","object":"chat.completion.chunk","created":{now},"model":"{model}","choices":[{{"index":0,"delta":{{"content":{json.dumps(chunk)}}},"finish_reason":null}}]}}\n\n'
+                await asyncio.sleep(0.015)
+            yield f'data: {{"id":"chatcmpl-{task_id}","object":"chat.completion.chunk","created":{now},"model":"{model}","choices":[{{"index":0,"delta":{{}},"finish_reason":"stop"}}]}}\n\n'
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+    resp_obj = {
+        "id": f"chatcmpl-{task_id}",
+        "object": "chat.completion",
+        "created": now,
+        "model": model,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": reply_text}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": pt + ct},
+    }
+    if cid:
+        resp_obj["conversation_id"] = cid
+    return resp_obj
 
 
 @router.post("/v1/videos")

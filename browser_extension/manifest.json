@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extName__",
-  "version": "2.4.3",
+  "version": "2.4.4",
   "description": "__MSG_extDescription__",
   "default_locale": "en",
   "icons": {
@@ -20,15 +20,7 @@
     "sidePanel"
   ],
   "host_permissions": [
-    "http://*/*",
-    "ws://*/*",
-    "https://*/*",
-    "https://labs.google/*",
-    "https://*.google.com/*",
-    "https://*.googleapis.com/*",
-    "https://dreamina.capcut.com/*",
-    "https://*.capcut.com/*",
-    "https://*.capcutapi.com/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js",
@@ -46,11 +38,7 @@
     {
       "matches": [
         "http://*/*",
-        "https://*/*",
-        "https://labs.google/*",
-        "https://dreamina.capcut.com/*",
-        "https://chatgpt.com/*",
-        "https://chat.openai.com/*"
+        "https://*/*"
       ],
       "js": [
         "content/fpb_config_content.js"

@@ -4088,6 +4088,27 @@ class Database:
             rows = await cur.fetchall()
             return [TaskType(**dict(r)) for r in rows]
 
+    async def list_active_task_type_handlers(self) -> List[str]:
+        """Return distinct task handlers for task types that are enabled and have active windows."""
+        async with self._read_conn() as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT DISTINCT COALESCE(t.create_task_handler, t.code) AS handler
+                FROM task_types t
+                JOIN task_type_windows m ON m.task_type_id = t.id
+                JOIN windows w ON m.window_pk = w.id
+                JOIN spaces s ON w.space_pk = s.id
+                JOIN browsers b ON s.browser_id = b.id
+                WHERE t.deleted = 0 AND t.enabled = 1
+                  AND m.deleted = 0 AND m.enabled = 1
+                  AND w.deleted = 0 AND w.enabled = 1
+                  AND b.deleted = 0
+                """
+            )
+            rows = await cur.fetchall()
+            return [str(r["handler"] or "").strip() for r in rows if r["handler"]]
+
     async def get_window_pool_maintainer_intervals_seconds(
         self,
         *,

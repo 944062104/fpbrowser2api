@@ -1,3 +1,4 @@
+// v2.4.4 - Chat completions enabled
 import { dismissVeoChangelogModalIfPresent, runVeoTask } from "./providers/veo_provider.js";
 import { runDreaminaTask } from "./providers/dreamina_provider.js";
 import { maybeHandleGptCloudflare, runGptTask } from "./providers/gpt_provider.js";

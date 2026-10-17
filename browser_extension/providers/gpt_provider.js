@@ -734,18 +734,23 @@ async function pageFetch(tabId, url, { method = "GET", headers = {}, body = null
     world: "MAIN",
     args: [url, { method, headers, body }],
     func: async (u, opts) => {
-      const init = { method: opts.method || "GET", headers: opts.headers || {}, credentials: "include" };
-      if (opts.body !== null && opts.body !== undefined) init.body = JSON.stringify(opts.body);
-      const r = await fetch(u, init);
-      const text = await r.text();
-      const hdrs = {};
-      try { for (const [k, v] of r.headers.entries()) hdrs[k] = v; } catch (_) {}
-      let json = null; try { json = text ? JSON.parse(text) : null; } catch (_) {}
-      return { status: r.status, headers: hdrs, text, json, url: r.url };
+      try {
+        const init = { method: opts.method || "GET", headers: opts.headers || {}, credentials: "include" };
+        if (opts.body !== null && opts.body !== undefined) init.body = JSON.stringify(opts.body);
+        const r = await fetch(u, init);
+        const text = await r.text();
+        const hdrs = {};
+        try { for (const [k, v] of r.headers.entries()) hdrs[k] = v; } catch (_) {}
+        let json = null; try { json = text ? JSON.parse(text) : null; } catch (_) {}
+        return { ok: true, status: r.status, headers: hdrs, text, json, url: r.url };
+      } catch (err) {
+        return { ok: false, error: String(err && err.message || err || "fetch error") };
+      }
     }
   });
   const res = Array.isArray(frames) && frames[0] ? frames[0].result : null;
   if (!res) throw new Error(`GPT pageFetch returned empty result for ${url}`);
+  if (res.ok === false) throw new Error(`GPT pageFetch failed for ${url}: ${res.error}`);
   return res;
 }
 
@@ -1111,8 +1116,9 @@ async function uploadImage(tabId, token, ref, index, runtime) {
   return { file_id: fileId, library_file_id: libraryFileId, file_name: fileName, file_size: blob.size, mime: blob.type || "image/png", width: dims.width, height: dims.height };
 }
 
-function messageContent(prompt, refs) {
-  if (!refs || !refs.length) return { content: { content_type: "text", parts: [prompt] }, metadata: { system_hints: ["picture_v2"] } };
+function messageContent(prompt, refs, isChat = false) {
+  const hints = isChat ? [] : ["picture_v2"];
+  if (!refs || !refs.length) return { content: { content_type: "text", parts: [prompt] }, metadata: { system_hints: hints } };
   const parts = [];
   const attachments = [];
   for (const ref of refs) {
@@ -1124,7 +1130,7 @@ function messageContent(prompt, refs) {
   parts.push(prompt);
   return {
     content: { content_type: "multimodal_text", parts },
-    metadata: { system_hints: ["picture_v2"], attachments, developer_mode_connector_ids: [], selected_github_repos: [], selected_all_github_repos: false, serialization_metadata: { custom_symbol_offsets: [] } }
+    metadata: { system_hints: hints, attachments, developer_mode_connector_ids: [], selected_github_repos: [], selected_all_github_repos: false, serialization_metadata: { custom_symbol_offsets: [] } }
   };
 }
 
@@ -1275,7 +1281,13 @@ function normalizeWebModel(p, kind) {
   const explicit = p.web_model || p.chatgpt_model || p.model_slug;
   if (explicit) return explicit;
   if (isImage2Payload(p)) return "gpt-5-5-thinking";
-  return p.model || p.model_code || (kind === "image" ? "gpt-5-5-thinking" : "gpt-5-5-thinking");
+  const raw = String(p.model || p.model_code || "").trim();
+  if (!raw) return kind === "image" ? "gpt-5-5-thinking" : "auto";
+  const lower = raw.toLowerCase();
+  if (lower === "gpt-4o" || lower === "gpt-4o-mini" || lower === "gpt-4" || lower === "gpt-3.5-turbo" || lower === "chatgpt" || lower === "chatgpt-free") {
+    return "auto";
+  }
+  return raw;
 }
 
 function mainModelForImage2(p) {
@@ -1675,21 +1687,35 @@ function appendRatioHint(prompt, p) {
 }
 
 async function startConversation(tabId, token, reqs, conduit, payload, kind, refs) {
+  const isChat = kind === "chat" || kind === "text";
   const model = normalizeWebModel(payload, kind);
   const prompt = kind === "image" ? appendRatioHint(payload.prompt || "", payload) : (payload.prompt || "");
-  const mc = messageContent(prompt, refs);
+  const mc = messageContent(prompt, refs, isChat);
   const path = "/backend-api/f/conversation";
+
+  let parentMessageId = "client-created-root";
+  let conversationId = payload.conversation_id ? String(payload.conversation_id).trim() : "";
+  if (conversationId) {
+    try {
+      const cpath = `/backend-api/conversation/${encodeURIComponent(conversationId)}`;
+      const cr = await pageFetch(tabId, CHATGPT + cpath, { headers: gptHeaders(token, cpath) });
+      if (cr && cr.json && cr.json.current_node) {
+        parentMessageId = cr.json.current_node;
+      }
+    } catch (_) {}
+  }
+
   const body = {
     action: "next",
     fork_from_shared_post: false,
-    parent_message_id: "client-created-root",
+    parent_message_id: parentMessageId,
     model,
     client_prepare_state: "success",
     timezone: "Asia/Shanghai",
     timezone_offset_min: -480,
     conversation_mode: { kind: "primary_assistant" },
     enable_message_followups: true,
-    system_hints: [],
+    system_hints: isChat ? [] : ["picture_v2"],
     supports_buffering: true,
     supported_encodings: ["v1"],
     client_contextual_info: { is_dark_mode: false, time_since_loaded: 51, page_height: 1111, page_width: 1731, pixel_ratio: 1.5, screen_height: 1440, screen_width: 2560, app_name: "chatgpt.com" },
@@ -1698,12 +1724,16 @@ async function startConversation(tabId, token, reqs, conduit, payload, kind, ref
     thinking_effort: "standard",
     messages: [{ id: uuid(), author: { role: "user" }, create_time: Math.floor(Date.now()/1000), content: mc.content, metadata: mc.metadata }]
   };
+  if (conversationId) {
+    body.conversation_id = conversationId;
+  }
   const headers = withRequirementHeaders(gptHeaders(token, path, "text/event-stream"), reqs, conduit);
   const r = await pageFetch(tabId, CHATGPT + path, { method: "POST", headers, body });
   if (!r || r.status >= 400) throw new Error(`conversation failed HTTP ${r && r.status}: ${(r && r.text || "").slice(0, 600)}`);
   throwIfTooManyRequests(r.json || r.text, `GPT ${kind}`);
   const got = extractAssets(r.text);
-  return { ...got, raw_text_tail: String(r.text || "").slice(-2000) };
+  const text = extractAssistantTextFromSse(r.text);
+  return { ...got, text, raw_text_all: r.text, raw_text_tail: String(r.text || "").slice(-2000) };
 }
 
 
@@ -1844,6 +1874,17 @@ function collectGeneratedPayload(v, out, fallbackOutputFormat = "") {
   for (const value of Object.values(v)) collectGeneratedPayload(value, out, outputFormat);
 }
 
+function cleanCitationTokens(text) {
+  if (!text || typeof text !== "string") return "";
+  return text
+    .replace(/[\ue200-\ue206][^\ue200-\ue206\n]*[\ue200-\ue206]?/g, "")
+    .replace(/(?:turn\d+search\d+)+/gi, "")
+    .replace(/■cite[^\s\n]*/g, "")
+    .replace(/【\d+†(?:source|来源)】/g, "")
+    .replace(/[\ue000-\uf8ff]/g, "")
+    .trim();
+}
+
 function parseSseJsonObjects(text) {
   const objects = [];
   const raw = String(text || "").trim();
@@ -1855,20 +1896,43 @@ function parseSseJsonObjects(text) {
       return objects;
     } catch (_) {}
   }
+
   let dataLines = [];
   const flush = () => {
     if (!dataLines.length) return;
     const data = dataLines.join("\n").trim();
     dataLines = [];
     if (!data || data === "[DONE]") return;
-    try { objects.push(JSON.parse(data)); } catch (_) {}
+    try {
+      objects.push(JSON.parse(data));
+    } catch (_) {
+      for (const line of data.split("\n")) {
+        const s = line.trim();
+        if (s && s !== "[DONE]") {
+          try { objects.push(JSON.parse(s)); } catch (_) {}
+        }
+      }
+    }
   };
-  for (const line of String(text || "").split(/\r?\n/)) {
-    if (!line.trim()) {
+
+  for (const rawLine of String(text || "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("event:") || line.startsWith("id:") || line.startsWith(":")) {
       flush();
       continue;
     }
-    if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+    if (line.startsWith("data:")) {
+      const payload = line.slice(5).trim();
+      if (payload === "[DONE]") {
+        flush();
+        continue;
+      }
+      try {
+        objects.push(JSON.parse(payload));
+      } catch (_) {
+        dataLines.push(payload);
+      }
+    }
   }
   flush();
   return objects;
@@ -1888,6 +1952,87 @@ function extractAssets(text) {
   }
   for (const obj of parseSseJsonObjects(s)) collectGeneratedPayload(obj, urls);
   return { conversation_id, file_ids, sediment_ids, urls };
+}
+
+function extractAssistantTextFromSse(text) {
+  let longest = "";
+  let appends = [];
+  const writingBlocks = new Map();
+
+  function recordWritingBlocks(wb) {
+    if (!wb || typeof wb !== "object") return;
+    for (const [k, v] of Object.entries(wb)) {
+      if (v && typeof v === "object" && typeof v.content === "string") {
+        writingBlocks.set(k, v.content);
+      }
+    }
+  }
+
+  for (const obj of parseSseJsonObjects(text)) {
+    if (!obj || typeof obj !== "object") continue;
+    const msg = obj.message;
+    if (msg && typeof msg === "object") {
+      const role = String((msg.author && msg.author.role) || msg.role || "").toLowerCase();
+      if (role === "assistant" || !role) {
+        const parts = msg.content && Array.isArray(msg.content.parts) ? msg.content.parts : [];
+        const full = parts.filter(x => typeof x === "string").join("");
+        if (full.length > longest.length) longest = full;
+        if (msg.metadata && msg.metadata.writing_blocks) {
+          recordWritingBlocks(msg.metadata.writing_blocks);
+        }
+      }
+    }
+    const ops = Array.isArray(obj.v) ? obj.v : [obj];
+    for (const op of ops) {
+      if (!op || typeof op !== "object") continue;
+      const opP = String(op.p || op.path || "");
+      if (opP.includes("/message/content/parts") && typeof op.v === "string") {
+        if (op.o === "append") appends.push(op.v);
+        else if (op.v.length > longest.length) longest = op.v;
+      }
+      if (opP.includes("/message/metadata/writing_blocks") && op.v) {
+        recordWritingBlocks(op.v);
+      }
+    }
+  }
+  const appended = appends.join("");
+  let mainText = (longest.length >= appended.length ? longest : appended).trim();
+  if (writingBlocks.size > 0) {
+    const blocksText = Array.from(writingBlocks.values()).join("\n\n").trim();
+    if (blocksText) {
+      mainText = mainText ? `${mainText}\n\n${blocksText}` : blocksText;
+    }
+  }
+  return cleanCitationTokens(mainText.trim());
+}
+
+function extractAssistantTextFromMapping(mapping) {
+  if (!mapping || typeof mapping !== "object") return "";
+  const assistantNodes = [];
+  for (const node of Object.values(mapping)) {
+    const msg = node && node.message;
+    if (!msg || typeof msg !== "object") continue;
+    const role = String((msg.author && msg.author.role) || msg.role || "").toLowerCase();
+    if (role === "assistant") {
+      const parts = msg.content && Array.isArray(msg.content.parts) ? msg.content.parts : [];
+      let text = parts.filter(x => typeof x === "string").join("").trim();
+      if (msg.metadata && msg.metadata.writing_blocks) {
+        const blocks = Object.values(msg.metadata.writing_blocks)
+          .map(b => (b && b.content) || "")
+          .filter(Boolean)
+          .join("\n\n");
+        if (blocks) {
+          text = text ? `${text}\n\n${blocks}` : blocks;
+        }
+      }
+      if (text) {
+        assistantNodes.push({ time: Number(msg.create_time || 0), text: text });
+      }
+    }
+  }
+  if (!assistantNodes.length) return "";
+  assistantNodes.sort((a, b) => b.time - a.time);
+  return cleanCitationTokens(assistantNodes[0].text);
 }
 
 function detectTooManyRequests(raw) {
@@ -2040,11 +2185,44 @@ function collectRefUrls(p) {
 }
 
 async function runConversationWorkflow(tabId, token, payload, kind, runtime) {
+  const isChat = kind === "chat" || kind === "text";
   await runtime.progress(5, { stage: "requirements", workflow_kind: kind });
   const reqs = await requirements(tabId, token);
   const refs = [];
   const refUrls = collectRefUrls(payload);
   for (let i = 0; i < refUrls.length; i++) refs.push(await uploadImage(tabId, token, refUrls[i], i, runtime));
+
+  if (isChat) {
+    const model = normalizeWebModel(payload, kind);
+    const conduit = await prepare(tabId, token, reqs, model);
+    await runtime.progress(15, { stage: "submit_conversation", workflow_kind: kind });
+    const started = await startConversation(tabId, token, reqs, conduit, payload, kind, refs);
+    const cid = started.conversation_id || "";
+    let reply = started.text || "";
+    if (cid) {
+      try {
+        const cpath = `/backend-api/conversation/${encodeURIComponent(cid)}`;
+        const cr = await pageFetch(tabId, CHATGPT + cpath, { headers: gptHeaders(token, cpath) });
+        if (cr && cr.json && cr.json.mapping) {
+          const mappingReply = extractAssistantTextFromMapping(cr.json.mapping);
+          if (mappingReply && (!reply || mappingReply.length >= reply.length)) {
+            reply = mappingReply;
+          }
+        }
+      } catch (_) {}
+    }
+    reply = cleanCitationTokens(reply);
+    await runtime.progress(100, { stage: "done", workflow_kind: "chat", conversation_id: cid });
+    return {
+      type: "gpt_workflow_chat",
+      workflow_kind: "chat",
+      conversation_id: cid,
+      text: reply,
+      content: reply,
+      message: { role: "assistant", content: reply },
+      raw_text_tail: started.raw_text_tail || ""
+    };
+  }
 
   const count = Math.max(1, Math.min(Number(payload.count || payload.n || 1) || 1, 4));
   const maxWaitMs = Math.max(60, Number(payload.max_wait_seconds || payload.timeout_seconds || 600)) * 1000;
@@ -2314,6 +2492,32 @@ async function queryProgressTask(tabId, token, p, runtime) {
   return { type: "gpt_progress", status: urls.length ? "completed" : "in_progress", workflow_kind: kind, conversation_id: cid, urls, image_url: kind === "image" ? (urls[0] || "") : undefined, video_url: kind === "video" ? (urls[0] || "") : undefined, file_ids, sediment_ids };
 }
 
+async function listModelsTask(tabId, token, runtime) {
+  const path = "/backend-api/models";
+  await runtime.progress(20, { stage: "models_fetch" });
+  const h = gptHeaders(token, path);
+  const r = await pageFetch(tabId, CHATGPT + path, {
+    method: "GET",
+    headers: h
+  });
+  if (!r || r.status >= 400) {
+    throw new Error(`GPT list_models HTTP ${r && r.status}: ${(r && r.text || "").slice(0, 500)}`);
+  }
+  const models = (r.json && Array.isArray(r.json.models)) ? r.json.models : [];
+  await runtime.progress(100, { stage: "done", count: models.length });
+  return {
+    type: "gpt_models",
+    models: models.map(m => ({
+      slug: m.slug,
+      title: m.title || m.slug,
+      description: m.description || "",
+      tags: m.tags || [],
+      max_tokens: m.max_tokens || 16384,
+    })),
+    raw: r.json || {}
+  };
+}
+
 async function runVideoWorkflow(tabId, token, payload, runtime) {
   await runtime.progress(5, { stage: "video_reserved", workflow_kind: "video" });
   throw new Error("GPT video workflow is reserved but not implemented yet");
@@ -2360,6 +2564,9 @@ export async function runGptTask(msg, runtime) {
   const token = p.access_token || (await getAccessToken(tabId, target)).access_token;
   if (!token) throw new Error("GPT access_token missing");
 
+  if (action === "list_models" || action === "get_models" || action === "models") {
+    return await listModelsTask(tabId, token, runtime);
+  }
   if (action === "refresh_balance" || action === "balance_refresh" || action === "get_balance" || action === "balance") {
     return await refreshBalanceTask(tabId, token, runtime);
   }
@@ -2367,7 +2574,11 @@ export async function runGptTask(msg, runtime) {
     return await queryProgressTask(tabId, token, p, runtime);
   }
 
-  const kind = (p.workflow_kind || "").toLowerCase().includes("video") ? "video" : "image";
+  const kind = (p.workflow_kind || "").toLowerCase().includes("video")
+    ? "video"
+    : (p.workflow_kind === "chat" || p.workflow_kind === "text")
+      ? "chat"
+      : "image";
   const shouldRunPreWorkflowActivity = kind === "video" || (kind === "image" && isImage2Payload(p));
   if (shouldRunPreWorkflowActivity) {
     // runImage2Workflow / runVideoWorkflow 前刷新页面并引入拟人操作

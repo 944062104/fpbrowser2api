@@ -173,6 +173,18 @@ async def get_extension_client(space_id: str, window_key: str) -> Optional[Exten
         return _clients.get(_client_key(space_id, window_key))
 
 
+async def get_any_extension_client(provider: Optional[str] = None) -> Optional[ExtensionClient]:
+    """Return an active connected extension client, optionally preferring one supporting the given provider."""
+    async with _clients_lock:
+        if not _clients:
+            return None
+        if provider:
+            for c in _clients.values():
+                if provider in c.capabilities:
+                    return c
+        return next(iter(_clients.values()))
+
+
 async def submit_extension_task(
     *,
     space_id: str,

@@ -15,6 +15,7 @@ import json
 import os
 import socket
 import ssl
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -1276,7 +1277,6 @@ async def gpt_fetch_membership_via_extension(
         timeout_seconds=max(5.0, float(membership_timeout_seconds or 45.0)),
     )
     out = dict(result or {})
-    print(f"result:{result}")
     membership = _one_str(out.get("membership") or out.get("plan_title") or out.get("plan_type") or _gpt_plan_from_jwt(at))
     if not membership:
         membership = _gpt_membership_from_raw(out.get("raw"), "")
@@ -1383,8 +1383,10 @@ async def refresh_gpt_balance_via_extension(
             "sora_access_token": access_token,
             "sora_access_expires": access_expires,
         }
-        if result.get("cooldown_until"):
+        if result.get("cooldown_until") and remaining <= 0:
             kwargs["cooldown_until"] = str(result.get("cooldown_until"))
+        elif remaining > 0:
+            kwargs["cooldown_until"] = None
         if result.get("membership") or result.get("plan_type"):
             kwargs["sora_plan_title"] = _one_str(result.get("membership") or result.get("plan_type")) or None
         subscription_end = _gpt_subscription_end_from_payload(result)
@@ -1511,7 +1513,6 @@ async def refresh_gpt_balance(ctx: Any) -> int:
     )
     if app_config.extension_executor_enabled and picked.space_id and picked.window_key and picked.browser_base_url:
         ext_info = await refresh_gpt_balance_via_extension(db=ctx.db, picked=picked, refresh_timeout_seconds=30.0, auto_triger_connection=True)
-        print(f"ext_info:{ext_info}");
         if isinstance(ext_info, dict) and (ext_info.get("remaining") is not None or ext_info.get("image_quota_remaining") is not None):
             return _int(ext_info.get("remaining", ext_info.get("image_quota_remaining")), 0)
 
@@ -1523,8 +1524,10 @@ async def refresh_gpt_balance(ctx: Any) -> int:
     kwargs: Dict[str, Any] = {"mapping_id": mapping_id, "remaining_quota": remaining, "sora_remaining_count": remaining}
     if info.get("membership") or info.get("plan_type"):
         kwargs["sora_plan_title"] = _one_str(info.get("membership") or info.get("plan_type")) or None
-    if info.get("cooldown_until"):
+    if info.get("cooldown_until") and remaining <= 0:
         kwargs["cooldown_until"] = str(info.get("cooldown_until"))
+    elif remaining > 0:
+        kwargs["cooldown_until"] = None
     subscription_end = _gpt_subscription_end_from_payload(info)
     if subscription_end:
         kwargs["sora_subscription_end"] = subscription_end
@@ -1550,8 +1553,7 @@ async def gpt_submit_task_via_extension(
             progress_cb=progress_cb,
             log_file=MONITOR_LOG_FILE,
         )
-    print(f"p:{p}");
-    kind = "video" if _is_video_payload(p) else "image"
+    kind = "video" if _is_video_payload(p) else ("chat" if (p.get("workflow_kind") in ("chat", "text") or p.get("messages")) else "image")
     max_wait = float(p.get("max_wait_seconds") or p.get("gpt_pending_max_wait_seconds") or timeout_seconds or 600.0)
     ext_payload = dict(p)
     ext_payload.update(
@@ -1652,7 +1654,7 @@ async def gpt_workflow(
     sess.browser_headless = headless
     sess.browser_pure_mode = pure_mode
     log_file = getattr(sess, "_log_file", MONITOR_LOG_FILE)
-    kind = "video" if _is_video_payload(payload) else "image"
+    kind = "video" if _is_video_payload(payload) else ("chat" if (payload.get("workflow_kind") in ("chat", "text") or payload.get("messages")) else "image")
     await progress_cb(1, {"stage": "init", "workflow_kind": kind, "prompt": safe_trim(prompt, 200)})
 
     try:
@@ -1732,3 +1734,92 @@ async def gpt_workflow(
         if _gpt_is_token_invalidated_error(e):
             raise RuntimeError(str(e)) from e
         raise
+
+
+_GPT_MODELS_CACHE: List[Dict[str, Any]] = []
+_GPT_MODELS_CACHE_TIME: float = 0.0
+_GPT_MODELS_CACHE_TTL: float = 1800.0  # 30 minutes cache
+
+# Fallback default models if extension is temporarily not connected
+_GPT_DEFAULT_MODELS: List[Dict[str, Any]] = [
+    {"slug": "auto", "title": "Auto"},
+    {"slug": "gpt-5-6", "title": "GPT-5.6 Luna"},
+    {"slug": "gpt-5-3-mini", "title": "GPT-5.3 Mini"},
+    {"slug": "gpt-5-6-mini", "title": "GPT-5.6 Luna"},
+    {"slug": "gpt-6", "title": "GPT-6"},
+    {"slug": "gpt-6-mini", "title": "GPT-6"},
+]
+
+
+async def gpt_fetch_live_models_via_extension(timeout_seconds: float = 15.0) -> List[Dict[str, Any]]:
+    """Query an active browser extension client to fetch real-time ChatGPT models."""
+    from .browser_extension_bridge import get_any_extension_client
+    from .browser_extension_interaction import submit_extension_task
+
+    client = await get_any_extension_client("gpt")
+    if not client:
+        return []
+
+    token = ""
+    try:
+        from ..api.routes import db
+        if db:
+            async with db._read_conn() as conn:
+                cur = await conn.execute(
+                    """
+                    SELECT m.sora_access_token
+                    FROM task_type_windows m
+                    JOIN task_types t ON t.id = m.task_type_id
+                    JOIN windows w ON w.id = m.window_pk
+                    WHERE t.deleted = 0 AND t.enabled = 1 AND t.code = 'gpt_workflow'
+                      AND (w.window_key = ? OR CAST(w.id AS TEXT) = ?)
+                      AND m.deleted = 0 AND m.enabled = 1
+                      AND m.sora_access_token IS NOT NULL AND m.sora_access_token != ''
+                    LIMIT 1
+                    """,
+                    (client.window_key, client.window_key),
+                )
+                row = await cur.fetchone()
+                if row and row[0]:
+                    token = str(row[0]).strip()
+    except Exception as e:
+        logger.debug("Failed to lookup token for model fetch: %s", e)
+
+    payload: Dict[str, Any] = {"action": "list_models", "workflow_kind": "list_models"}
+    if token:
+        payload["access_token"] = token
+
+    result = await submit_extension_task(
+        space_id=client.space_id,
+        window_key=client.window_key,
+        provider="gpt",
+        payload=payload,
+        progress_cb=_noop_progress_cb,
+        timeout_seconds=max(5.0, float(timeout_seconds)),
+    )
+    models = (result or {}).get("models")
+    if isinstance(models, list) and models:
+        return models
+    return []
+
+
+async def get_cached_gpt_models(force_refresh: bool = False) -> List[Dict[str, Any]]:
+    """Get ChatGPT models with automatic caching and extension live-refresh."""
+    global _GPT_MODELS_CACHE, _GPT_MODELS_CACHE_TIME
+    now = time.time()
+    if not force_refresh and _GPT_MODELS_CACHE and (now - _GPT_MODELS_CACHE_TIME < _GPT_MODELS_CACHE_TTL):
+        return list(_GPT_MODELS_CACHE)
+
+    try:
+        live = await gpt_fetch_live_models_via_extension(timeout_seconds=10.0)
+        if live:
+            _GPT_MODELS_CACHE = live
+            _GPT_MODELS_CACHE_TIME = now
+            return list(_GPT_MODELS_CACHE)
+    except Exception as e:
+        logger.warning("gpt_fetch_live_models_via_extension failed (using fallback/cache): %s", e)
+
+    if _GPT_MODELS_CACHE:
+        return list(_GPT_MODELS_CACHE)
+    return list(_GPT_DEFAULT_MODELS)
+

@@ -1903,7 +1903,7 @@ class TaskService:
 
             _last_saved_progress = -1
 
-            async def progress_cb(p: int, _payload: Optional[Dict[str, Any]]):
+            async def progress_cb(p: int, _payload: Optional[Dict[str, Any]] = None):
                 nonlocal _last_saved_progress
                 pi = int(p)
                 if pi == _last_saved_progress:
@@ -2023,6 +2023,7 @@ class TaskService:
                     )
                 elif picked.create_task_handler == "gpt_workflow":
                     gpt_payload = dict(payload or {})
+                    gpt_payload["task_id"] = task_id
                     result = await asyncio.wait_for(
                         gpt_workflow(
                             gpt_payload,
@@ -2225,8 +2226,38 @@ class TaskService:
                     or "不能超过4k" in _err_lower
                     or bool(getattr(e, "content_violation", False))
                 )
+                _is_429 = (
+                    status_code == 429
+                    or "429" in str(e)
+                    or "model_cap_exceeded" in _err_lower
+                    or "too many messages" in _err_lower
+                )
+                if _is_429:
+                    clears_in = 1800
+                    try:
+                        m_clears = re.search(r'"clears_in"\s*:\s*(\d+)', str(e))
+                        if m_clears:
+                            clears_in = max(60, int(m_clears.group(1)))
+                    except Exception:
+                        pass
+                    try:
+                        from datetime import datetime, timedelta
+                        cd_dt = (datetime.now() + timedelta(seconds=clears_in)).strftime("%Y-%m-%d %H:%M:%S")
+                        await self.db.update_task_type_window(picked.mapping_id, error_cooldown_until=cd_dt)
+                        logger.warning("mapping %s hit rate limit (429), cooling down for %ss until %s", picked.mapping_id, clears_in, cd_dt)
+                    except Exception:
+                        pass
+                elif no_penalty:
+                    try:
+                        from datetime import datetime, timedelta
+                        cd_dt = (datetime.now() + timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
+                        await self.db.update_task_type_window(picked.mapping_id, error_cooldown_until=cd_dt)
+                        logger.info("mapping %s transient error (no_penalty), 30s cooldown for failover", picked.mapping_id)
+                    except Exception:
+                        pass
+
                 # ---- 错误重试逻辑 ----
-                max_retries = picked.error_retry_count
+                max_retries = max(int(picked.error_retry_count or 0), 2 if (_is_429 or no_penalty) else (1 if not _is_violation else 0))
                 can_retry = (
                     max_retries > 0
                     and _retry_attempt < max_retries
