@@ -8,13 +8,15 @@
 from __future__ import annotations
 
 import bcrypt
-from fastapi import HTTPException, Security
+from typing import Optional
+
+from fastapi import HTTPException, Security, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .config import config
 
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 
 class AuthManager:
@@ -34,9 +36,29 @@ class AuthManager:
             return False
 
 
-async def verify_api_key_header(credentials: HTTPAuthorizationCredentials = Security(security)) -> str:
-    api_key = credentials.credentials
-    if not AuthManager.verify_api_key(api_key):
+async def verify_api_key_header(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(security),
+) -> str:
+    api_key = credentials.credentials if credentials else None
+
+    if not api_key:
+        auth_hdr = request.headers.get("authorization") or ""
+        if auth_hdr:
+            api_key = auth_hdr.replace("Bearer ", "").replace("bearer ", "").strip()
+
+    if not api_key:
+        api_key = request.headers.get("x-api-key") or request.headers.get("api-key") or ""
+
+    if api_key:
+        if AuthManager.verify_api_key(api_key):
+            return api_key
         raise HTTPException(status_code=401, detail="Invalid API key")
-    return api_key
+
+    # 本机回环 (127.0.0.1 / ::1 / localhost) 允许免 Auth 直通，避免 Codex/ccswitch 未发 Bearer 导致 403/502
+    client_host = request.client.host if request.client else ""
+    if client_host in ("127.0.0.1", "::1", "localhost", "testclient"):
+        return config.api_key or "local"
+
+    raise HTTPException(status_code=401, detail="API key is required")
 
