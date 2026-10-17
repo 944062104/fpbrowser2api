@@ -15,6 +15,20 @@
       .truncate-err { max-width: 520px; }
       .window-acc { max-width: 360px; }
       .window-tasks-modal-dialog { max-width: min(1600px, 96vw); }
+      .tasks-table-wrap {
+        max-height: calc(100vh - 280px);
+        min-height: 380px;
+        overflow: auto;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+      }
+      .tasks-table-wrap thead th {
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        background: #f8fafc;
+        box-shadow: inset 0 -1px 0 #cbd5e1;
+      }
     </style>
   </head>
   <body class="bg-light">
@@ -112,7 +126,7 @@
 
       <div class="card shadow-sm">
         <div class="card-body">
-          <div class="table-responsive">
+          <div class="table-responsive tasks-table-wrap">
             <table class="table table-sm align-middle" style="min-width: 1320px;">
               <thead>
                 <tr class="small2">
@@ -358,6 +372,10 @@
       }
 
       function mediaKindLabel(item) {
+        const payload = parsePromptPayload(item);
+        if (payload && (payload.workflow_kind === "chat" || payload.workflow_kind === "text" || payload.messages)) {
+          return "对话";
+        }
         return resolveNFramesFromPromptItem(item) === 1 ? "图片" : "视频";
       }
 

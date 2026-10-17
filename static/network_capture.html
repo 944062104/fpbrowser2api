@@ -8,12 +8,25 @@
     <link href="/assets/admin-nav.css" rel="stylesheet" />
     <link href="/assets/admin-theme.css" rel="stylesheet" />
     <style>
-      html, body { height: 100%; }
-      body { display: flex; flex-direction: column; }
+      html, body { min-height: 100%; }
+      body { display: flex; flex-direction: column; overflow-y: auto; }
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
       .small2 { font-size: 12px; }
       .page-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-      .capture-table-wrap { height: calc(100dvh - 392px); min-height: 320px; overflow: auto; }
+      .capture-table-wrap {
+        height: calc(100dvh - 392px);
+        min-height: 320px;
+        overflow: auto;
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+      }
+      .capture-table-wrap thead th {
+        position: sticky;
+        top: 0;
+        z-index: 3;
+        background: #f8fafc;
+        box-shadow: inset 0 -1px 0 #cbd5e1;
+      }
       .detail-pre { max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
       .url-cell { max-width: 680px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .row-selected > td { background: #fff3cd !important; }

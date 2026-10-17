@@ -206,11 +206,31 @@ body {
   border-bottom-left-radius: 0 !important;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #f1f5f9; }
-::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+/* Modern Accessible Scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 #f1f5f9;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 5px;
+  border: 1.5px solid #f1f5f9;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+::-webkit-scrollbar-thumb:active {
+  background: #475569;
+}
 
 /* Section headers & page titles */
 h3.mb-1 { font-size: 1.2rem; font-weight: 700; color: #0f172a; }
