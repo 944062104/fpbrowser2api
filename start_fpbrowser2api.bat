@@ -5,7 +5,9 @@ cd /d "%~dp0"
 title "FPBrowser2API Service"
 
 set "PY_EXE=python"
-if exist "D:\Python313\python.exe" (
+if exist "D:\Program Files\anaconda3\python.exe" (
+    set "PY_EXE=D:\Program Files\anaconda3\python.exe"
+) else if exist "D:\Python313\python.exe" (
     set "PY_EXE=D:\Python313\python.exe"
 )
 
