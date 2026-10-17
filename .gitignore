@@ -52,7 +52,9 @@ __pycache__/
 /data/*.db-wal
 /data/*.yaml
 /data/*.yml
+/data/*.sqlite
 /scratch/
 /output/
 start_all_services.bat
+make_desktop_shortcuts.py
 /bin/
