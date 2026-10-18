@@ -30,6 +30,9 @@ def get_python_exe() -> str:
     """获取当前或优先的 Python 解释器路径"""
     if os.environ.get("VB_PY"):
         return os.environ["VB_PY"]
+    conda_py = Path(r"D:\Program Files\anaconda3\python.exe")
+    if conda_py.is_file():
+        return str(conda_py)
     return sys.executable
 
 
@@ -54,8 +57,8 @@ def main():
             print("   ▶️ 正在启动 VirtualBrowser API 服务...")
             popen_kwargs: dict = {"cwd": str(vb_server_dir)}
             if sys.platform == "win32":
-                # DETACHED_PROCESS 保证跨控制台后台稳定常驻，不依赖交互式桌面会话
-                popen_kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+                # CREATE_NO_WINDOW (0x08000000) 配合 CREATE_NEW_PROCESS_GROUP 保证无黑框常驻
+                popen_kwargs["creationflags"] = 0x08000000 | subprocess.CREATE_NEW_PROCESS_GROUP
             else:
                 popen_kwargs["preexec_fn"] = os.setsid
             subprocess.Popen([py_exe, "server.py"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **popen_kwargs)
@@ -63,7 +66,7 @@ def main():
             print(f"   ⚠️ 未在 {vb_server_dir} 找到 server.py，跳过启动。")
 
     # 等待 9000 就绪
-    for _ in range(20):
+    for _ in range(25):
         if is_port_listening(9000):
             break
         time.sleep(0.3)
@@ -78,7 +81,7 @@ def main():
             print("   ▶️ 正在启动 FPBrowser2API 网关...")
             popen_kwargs = {"cwd": str(root_dir)}
             if sys.platform == "win32":
-                popen_kwargs["creationflags"] = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+                popen_kwargs["creationflags"] = 0x08000000 | subprocess.CREATE_NEW_PROCESS_GROUP
             else:
                 popen_kwargs["preexec_fn"] = os.setsid
             subprocess.Popen([py_exe, "main.py"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **popen_kwargs)

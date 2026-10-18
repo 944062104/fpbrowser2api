@@ -68,16 +68,6 @@ def stop_port_listeners(ports=(9000, 8000)) -> int:
                 except Exception as e:
                     print(f"[!] 关闭 PID={pid} 失败: {e}")
 
-    # 清理 mihomo 代理进程
-    for p in psutil.process_iter(["pid", "name"]):
-        try:
-            if "mihomo" in p.info["name"].lower():
-                print(f"[*] 正在关闭代理进程: {p.info['name']} [PID: {p.info['pid']}]...")
-                kill_proc_tree(p)
-                stopped_count += 1
-        except Exception:
-            pass
-
     return stopped_count
 
 
