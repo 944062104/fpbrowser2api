@@ -18,8 +18,6 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr /R /C:":8000 .*LISTENING"') d
     taskkill /F /PID %%a >nul 2>&1
 )
 
-taskkill /F /IM "mihomo.exe" >nul 2>&1
-
 echo.
 echo ========================================================
 echo   服务已全部停止。

@@ -176,6 +176,8 @@ GPT_IMAGE2_VIDEO_MODELS: Dict[str, str] = {
 
 def _public_image_model_from_sync_model(model: str) -> Optional[str]:
     raw = str(model or "").strip()
+    if raw in OPENAI_COMPAT_IMAGE_MODEL_SET:
+        return raw
     if not raw.endswith("_sync"):
         return None
     base = raw[: -len("_sync")]
