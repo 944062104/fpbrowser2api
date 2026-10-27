@@ -1044,8 +1044,9 @@ async def create_chat_completion(
         "model": model,
         "web_model": model if model in ("gpt-4o", "gpt-4o-mini") else "auto",
     }
-    if body.get("conversation_id"):
-        task_payload["conversation_id"] = body.get("conversation_id")
+    conversation_id = str((body or {}).get("conversation_id") or "").strip()
+    if conversation_id:
+        task_payload["conversation_id"] = conversation_id
 
     target_window_pk = body.get("window_pk")
     if conversation_id and not target_window_pk and db:
