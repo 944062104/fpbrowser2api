@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+
+logger = logging.getLogger("fpbrowser2api")
 import os
 import re
 import time
@@ -26,6 +29,11 @@ from ..core.public_api_limits import (
 )
 from ..services.task_service import TaskService
 from ..services.task_handler_registry import CreateTaskContext, get_create_task_handler
+from ..services.chat_adapter import (
+    clean_chat_reply,
+    extract_prompt_and_system,
+    build_completion_payload,
+)
 
 
 router = APIRouter()
@@ -393,45 +401,12 @@ def _normalize_video_task_payload(payload: Dict[str, Any], *, require_image_seco
     return task_type_code, payload
 
 
-def _clean_chat_reply_text(text: str) -> str:
-    if not text:
-        return ""
-    # Strip ChatGPT private Unicode citation markers: \ue200cite...\ue201 or PUA blocks
-    s = re.sub(r"[\ue200-\ue206][^\ue200-\ue206\n]*[\ue200-\ue206]?", "", text)
-    # Strip orphaned turnXsearchY tokens
-    s = re.sub(r"(?:turn\d+search\d+)+", "", s, flags=re.IGNORECASE)
-    # Strip raw ■cite tokens
-    s = re.sub(r"■cite[^\s\n]*", "", s)
-    # Strip source citations like 【1†source】
-    s = re.sub(r"【\d+†(?:source|来源)】", "", s)
-    # Strip any remaining Private Use Area characters
-    s = re.sub(r"[\ue000-\uf8ff]", "", s)
-    return s.strip()
+_clean_chat_reply_text = clean_chat_reply
 
 
 def _build_openai_chat_completion(model: str, content: str) -> Dict[str, Any]:
     now = int(time.time())
-    return {
-        "id": f"chatcmpl-fpbrowser2api-{now}",
-        "object": "chat.completion",
-        "created": now,
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": content,
-                },
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {
-            "prompt_tokens": 1,
-            "completion_tokens": 1,
-            "total_tokens": 2,
-        },
-    }
+    return build_completion_payload(model, content, f"fpbrowser2api-{now}")
 
 
 def _timestamp_ms(value: Any = None) -> int:
@@ -657,10 +632,12 @@ async def _wait_for_task_final(task_id: str, timeout_sec: float, poll_interval_s
             )
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            ttc = getattr(last_task, "task_type_code", "") if last_task else ""
+            timeout_msg = f"{ttc} task timed out" if ttc else "task timed out"
             raise HTTPException(
                 status_code=504,
                 detail={
-                    "message": "image generation timed out",
+                    "message": timeout_msg,
                     "code": "task_timeout",
                     "task_id": getattr(last_task, "task_id", task_id),
                 },
@@ -870,6 +847,7 @@ async def _create_task_from_request(body: CreateTaskRequest) -> Dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("create_task failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if acquired and gate is not None:
@@ -981,7 +959,8 @@ async def list_openai_compatible_models(api_key: str = Depends(verify_api_key_he
             })
 
     # 1. GPT Workflow: 动态获取实时模型 + 基础别名兼容 + GPT 生图
-    if "gpt_workflow" in active_handlers:
+    if "gpt_workflow" in active_handlers or "gpt_chat" in active_handlers:
+        add_model("auto", owned_by="openai")
         from ..services.gpt_task_executor import get_cached_gpt_models
         live_gpt_models = await get_cached_gpt_models()
         for item in live_gpt_models:
@@ -1030,6 +1009,9 @@ async def get_openai_compatible_model(model_id: str, api_key: str = Depends(veri
 
 
 @router.post("/v1/chat/completions")
+@router.post("/v1/chat/completions/responses")
+@router.post("/v1/responses")
+@router.post("/responses")
 async def create_chat_completion(
     api_key: str = Depends(verify_api_key_header),
     body: Dict[str, Any] = Body(...),
@@ -1047,38 +1029,14 @@ async def create_chat_completion(
             f"fpbrowser2api channel test ok for {model}; use POST /v1/videos to create video tasks.",
         )
 
-    def _msg_text(m: Any) -> str:
-        if not isinstance(m, dict):
-            return ""
-        c = m.get("content")
-        if isinstance(c, list):
-            return " ".join(str(p.get("text") or "") for p in c if isinstance(p, dict) and p.get("type") == "text").strip()
-        return str(c or "").strip()
-
-    prompt = ""
-    conversation_id = str(body.get("conversation_id") or "").strip()
-    if conversation_id and isinstance(messages, list) and messages:
-        for m in reversed(messages):
-            if isinstance(m, dict) and str(m.get("role") or "").lower() == "user":
-                prompt = _msg_text(m)
-                if prompt:
-                    break
-    elif isinstance(messages, list) and messages:
-        if len(messages) == 1:
-            prompt = _msg_text(messages[0])
-        else:
-            lines = [f"[{str(m.get('role') or 'user').capitalize()}]: {_msg_text(m)}" for m in messages if _msg_text(m)]
-            prompt = "\n\n".join(lines)
-    elif body.get("prompt"):
-        prompt = str(body.get("prompt")).strip()
-
+    prompt = extract_prompt_and_system(body)
     if not prompt:
         if model in OPENAI_COMPAT_VIDEO_MODEL_SET:
             return _build_openai_chat_completion(
                 model,
                 f"fpbrowser2api channel test ok for {model}; use POST /v1/videos to create video tasks.",
             )
-        raise HTTPException(status_code=400, detail="messages or prompt is required")
+        raise HTTPException(status_code=400, detail="messages, prompt, or input is required")
 
     task_payload = {
         "workflow_kind": "chat",
@@ -1109,7 +1067,7 @@ async def create_chat_completion(
 
     created = await _create_task_from_request(
         CreateTaskRequest(
-            task_type_code="gpt_workflow",
+            task_type_code="gpt_chat",
             json=task_payload,
             mapping_id=body.get("mapping_id"),
             window_pk=target_window_pk,
@@ -1119,50 +1077,132 @@ async def create_chat_completion(
     if not task_id:
         return created
 
+    stream = bool((body or {}).get("stream"))
+    now = int(time.time())
+
+    if stream:
+        from fastapi.responses import StreamingResponse
+        from ..services.browser_extension_bridge import (
+            register_task_chunk_queue,
+            unregister_task_chunk_queue,
+        )
+
+        chunk_queue = register_task_chunk_queue(task_id)
+
+        async def real_stream_generator():
+            try:
+                seq = 0
+                # 1. Responses API 规范初始化握手事件链
+                yield f'event: response.created\ndata: {{"type":"response.created","sequence_number":{seq},"response":{{"id":"resp-{task_id}","status":"in_progress","model":"{model}"}}}}\n\n'
+                seq += 1
+
+                # 对话场景超时设为 180 秒（与执行器最大等待一致），避免复杂长代码被截断
+                waiter_task = asyncio.create_task(
+                    _wait_for_task_final(task_id, timeout_sec=180.0, poll_interval_sec=0.5)
+                )
+                accumulated_text = ""
+                last_heartbeat = time.monotonic()
+                message_item_started = False
+
+                while not waiter_task.done() or not chunk_queue.empty():
+                    try:
+                        delta = await asyncio.wait_for(chunk_queue.get(), timeout=0.1)
+                        if delta:
+                            accumulated_text += delta
+                            last_heartbeat = time.monotonic()
+
+                            if not message_item_started:
+                                yield f'event: response.output_item.added\ndata: {{"type":"response.output_item.added","sequence_number":{seq},"output_index":0,"item":{{"id":"msg-{task_id}","type":"message","role":"assistant","content":[]}}}}\n\n'
+                                seq += 1
+                                yield f'event: response.content_part.added\ndata: {{"type":"response.content_part.added","sequence_number":{seq},"output_index":0,"content_index":0,"part":{{"type":"text","text":""}}}}\n\n'
+                                seq += 1
+                                message_item_started = True
+
+                            yield f'data: {{"id":"chatcmpl-{task_id}","object":"chat.completion.chunk","created":{now},"model":"{model}","choices":[{{"index":0,"delta":{{"content":{json.dumps(delta)}}},"finish_reason":null}}]}}\n\n'
+                            yield f'event: response.output_text.delta\ndata: {{"type":"response.output_text.delta","sequence_number":{seq},"output_index":0,"content_index":0,"delta":{json.dumps(delta)}}}\n\n'
+                            seq += 1
+                    except asyncio.TimeoutError:
+                        now_mono = time.monotonic()
+                        if now_mono - last_heartbeat >= 4.0:
+                            yield ": ping\n\n"
+                            last_heartbeat = now_mono
+                        continue
+
+                # 安全异常隔离层：吸收下游一切 HTTPException/超时，优雅输出错误并完成流
+                final_task = None
+                err_msg = ""
+                try:
+                    final_task = await waiter_task
+                except Exception as w_exc:
+                    if hasattr(w_exc, "detail"):
+                        err_msg = str(getattr(w_exc, "detail"))
+                    else:
+                        err_msg = str(w_exc or "Task failed")
+
+                if final_task is None or getattr(final_task, "status", "") != "completed":
+                    if not err_msg:
+                        err_msg = getattr(final_task, "error_message", None) or "Task failed"
+                    logger.warning("gpt_chat stream terminated with error: %s (task_id=%s)", err_msg, task_id)
+                    yield f'event: response.failed\ndata: {{"type":"response.failed","sequence_number":{seq},"response":{{"id":"resp-{task_id}","status":"failed","error":{{"message":{json.dumps(err_msg)}}}}}}}\n\n'
+                    seq += 1
+                    yield f'data: {{"error":{{"message":{json.dumps(err_msg)}}}}}\n\n'
+                    yield f'event: response.completed\ndata: {{"type":"response.completed","sequence_number":{seq},"response":{{"id":"resp-{task_id}","status":"failed","model":"{model}","output":[]}}}}\n\n'
+                else:
+                    if not accumulated_text:
+                        res = final_task.result if isinstance(final_task.result, dict) else {}
+                        fallback = clean_chat_reply(str(res.get("text") or res.get("content") or ""))
+                        if fallback:
+                            accumulated_text = fallback
+                            if not message_item_started:
+                                yield f'event: response.output_item.added\ndata: {{"type":"response.output_item.added","sequence_number":{seq},"output_index":0,"item":{{"id":"msg-{task_id}","type":"message","role":"assistant","content":[]}}}}\n\n'
+                                seq += 1
+                                yield f'event: response.content_part.added\ndata: {{"type":"response.content_part.added","sequence_number":{seq},"output_index":0,"content_index":0,"part":{{"type":"text","text":""}}}}\n\n'
+                                seq += 1
+                                message_item_started = True
+                            yield f'data: {{"id":"chatcmpl-{task_id}","object":"chat.completion.chunk","created":{now},"model":"{model}","choices":[{{"index":0,"delta":{{"content":{json.dumps(fallback)}}},"finish_reason":null}}]}}\n\n'
+                            yield f'event: response.output_text.delta\ndata: {{"type":"response.output_text.delta","sequence_number":{seq},"output_index":0,"content_index":0,"delta":{json.dumps(fallback)}}}\n\n'
+                            seq += 1
+
+                    final_clean_text = clean_chat_reply(accumulated_text)
+                    if message_item_started:
+                        yield f'event: response.output_text.done\ndata: {{"type":"response.output_text.done","sequence_number":{seq},"output_index":0,"content_index":0,"text":{json.dumps(final_clean_text)}}}\n\n'
+                        seq += 1
+                        yield f'event: response.output_item.done\ndata: {{"type":"response.output_item.done","sequence_number":{seq},"output_index":0,"item":{{"id":"msg-{task_id}","type":"message","status":"completed","role":"assistant","content":[{{"type":"text","text":{json.dumps(final_clean_text)}}}]}}}}\n\n'
+                        seq += 1
+
+                    yield f'event: response.completed\ndata: {{"type":"response.completed","sequence_number":{seq},"response":{{"id":"resp-{task_id}","status":"completed","model":"{model}","output":[{{"id":"msg-{task_id}","type":"message","role":"assistant","content":[{{"type":"text","text":{json.dumps(final_clean_text)}}}]}}],"usage":{{"input_tokens":10,"output_tokens":{max(1, len(final_clean_text)//4)},"total_tokens":{10 + max(1, len(final_clean_text)//4)}}}}}}}\n\n'
+                    yield f'data: {{"id":"chatcmpl-{task_id}","object":"chat.completion.chunk","created":{now},"model":"{model}","choices":[{{"index":0,"delta":{{}},"finish_reason":"stop"}}]}}\n\n'
+                yield "data: [DONE]\n\n"
+            finally:
+                unregister_task_chunk_queue(task_id)
+
+        return StreamingResponse(real_stream_generator(), media_type="text/event-stream")
+
     task = await _wait_for_task_final(
         task_id,
         timeout_sec=180.0,
-        poll_interval_sec=1.5,
+        poll_interval_sec=1.0,
     )
     result = task.result if isinstance(task.result, dict) else {}
     reply_text = str(result.get("text") or result.get("content") or "").strip()
     if not reply_text and isinstance(result.get("message"), dict):
         reply_text = str(result["message"].get("content") or "").strip()
 
-    reply_text = _clean_chat_reply_text(reply_text)
+    reply_text = clean_chat_reply(reply_text)
     if not reply_text:
         reply_text = "（处理完成，未获取到回复内容）"
 
     cid = str(result.get("conversation_id") or "")
-    stream = bool((body or {}).get("stream"))
-    now = int(time.time())
     pt, ct = max(1, len(prompt) // 4), max(1, len(reply_text) // 4)
 
-    if stream:
-        from fastapi.responses import StreamingResponse
-
-        async def event_generator():
-            step = 6
-            for i in range(0, len(reply_text), step):
-                chunk = reply_text[i : i + step]
-                yield f'data: {{"id":"chatcmpl-{task_id}","object":"chat.completion.chunk","created":{now},"model":"{model}","choices":[{{"index":0,"delta":{{"content":{json.dumps(chunk)}}},"finish_reason":null}}]}}\n\n'
-                await asyncio.sleep(0.015)
-            yield f'data: {{"id":"chatcmpl-{task_id}","object":"chat.completion.chunk","created":{now},"model":"{model}","choices":[{{"index":0,"delta":{{}},"finish_reason":"stop"}}]}}\n\n'
-            yield "data: [DONE]\n\n"
-
-        return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-    resp_obj = {
-        "id": f"chatcmpl-{task_id}",
-        "object": "chat.completion",
-        "created": now,
-        "model": model,
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": reply_text}, "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": pt + ct},
-    }
-    if cid:
-        resp_obj["conversation_id"] = cid
-    return resp_obj
+    return build_completion_payload(
+        model=model,
+        content=reply_text,
+        task_id=task_id,
+        conversation_id=cid,
+        prompt_tokens=pt,
+        completion_tokens=ct,
+    )
 
 
 @router.post("/v1/videos")
