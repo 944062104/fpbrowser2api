@@ -38,6 +38,7 @@ APP_ROOT = get_app_root()
 
 CONFIG_DIR = APP_ROOT / "config"
 DATA_DIR = APP_ROOT / "data"
+GENERATED_IMAGES_DIR = DATA_DIR / "generated_images"
 STATIC_DIR = APP_ROOT / "static"
 RULES_DIR = APP_ROOT / "rules"
 LOGS_DIR = APP_ROOT / "logs"
@@ -50,5 +51,5 @@ PID_FILE = APP_ROOT / "fpbrowser2api.pid"
 
 def ensure_runtime_dirs() -> None:
     """创建运行时常用可写目录。"""
-    for path in (DATA_DIR, LOGS_DIR, ANALYZE_DIR):
+    for path in (DATA_DIR, GENERATED_IMAGES_DIR, LOGS_DIR, ANALYZE_DIR):
         path.mkdir(parents=True, exist_ok=True)

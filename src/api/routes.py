@@ -7,7 +7,9 @@ import json
 import logging
 
 logger = logging.getLogger("fpbrowser2api")
+import base64
 import os
+import uuid
 import re
 import time
 from datetime import datetime, timezone
@@ -20,6 +22,7 @@ from pydantic import BaseModel, Field
 from ..core.auth import verify_api_key_header
 from ..core.database import Database
 from ..core.models import TaskStatusResponse
+from ..core.paths import GENERATED_IMAGES_DIR
 from ..core.public_api_limits import (
     DEFAULT_PUBLIC_CREATE_TASK_MAX_INFLIGHT,
     DEFAULT_SERVER_COUNT,
@@ -1255,3 +1258,84 @@ async def get_task_status(task_id: str, api_key: str = Depends(verify_api_key_he
 @router.get("/v1/videos/{task_id}")
 async def get_video_status(task_id: str, api_key: str = Depends(verify_api_key_header)):
     return await _get_newapi_video_status_response(task_id)
+
+
+class InternalAssetUploadRequest(BaseModel):
+    data_url: str = Field(..., description="Base64 data URL: data:image/...;base64,...")
+    task_id: Optional[str] = Field(None, description="Associated task_id")
+    prefix: Optional[str] = Field("gpt_workflow/image", description="Prefix or subcategory")
+
+
+@router.post("/api/internal/assets/upload")
+async def upload_internal_asset(body: InternalAssetUploadRequest = Body(...)):
+    raw_data_url = (body.data_url or "").strip()
+    if not raw_data_url:
+        raise HTTPException(status_code=400, detail="data_url 不能为空")
+
+    match = re.match(r"^data:(image\/[a-zA-Z0-9\.\+-]+);base64,(.+)$", raw_data_url, re.DOTALL)
+    if not match:
+        raise HTTPException(status_code=400, detail="无效的 data_url 格式，必须为 data:image/...;base64,...")
+
+    mime_type = match.group(1).lower()
+    b64_content = match.group(2)
+
+    ext = ".png"
+    if "jpeg" in mime_type or "jpg" in mime_type:
+        ext = ".jpg"
+    elif "webp" in mime_type:
+        ext = ".webp"
+
+    try:
+        raw_bytes = base64.b64decode(b64_content)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"base64 解码失败: {e}")
+
+    if len(raw_bytes) > 30 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="图片体积过大 (超过 30MB)")
+
+    GENERATED_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    task_id_clean = re.sub(r"[^a-zA-Z0-9_-]", "", body.task_id or "")
+    timestamp = int(time.time())
+    rand_suffix = uuid.uuid4().hex[:6]
+
+    if task_id_clean:
+        filename = f"{task_id_clean}_{timestamp}_{rand_suffix}{ext}"
+    else:
+        filename = f"asset_{timestamp}_{rand_suffix}{ext}"
+
+    file_path = GENERATED_IMAGES_DIR / filename
+    await asyncio.to_thread(file_path.write_bytes, raw_bytes)
+
+    local_url = f"/static/generated_images/{filename}"
+
+    if task_id_clean and db is not None:
+        try:
+            task_row = await db.get_task(task_id_clean)
+            if task_row:
+                await db.update_task(task_id_clean, image_path=local_url)
+                rj = task_row.get("result_json")
+                if rj:
+                    try:
+                        robj = json.loads(rj) if isinstance(rj, str) else rj
+                        if isinstance(robj, dict):
+                            robj["local_image_url"] = local_url
+                            robj["local_url"] = local_url
+                            if not robj.get("urls"):
+                                robj["urls"] = [local_url]
+                            else:
+                                robj["urls"] = [local_url if "estuary/content" in str(u) else u for u in robj["urls"]]
+                            if "estuary/content" in str(robj.get("image_url") or ""):
+                                robj["image_url"] = local_url
+                            await db.update_task(task_id_clean, result=robj)
+                    except Exception as err:
+                        logger.warning("sync local_url to task result_json failed: %s", err)
+        except Exception as e:
+            logger.warning("update task %s image_path failed: %s", task_id_clean, e)
+
+    return {
+        "status": "ok",
+        "url": local_url,
+        "filename": filename,
+        "size": len(raw_bytes),
+        "mime": mime_type,
+    }

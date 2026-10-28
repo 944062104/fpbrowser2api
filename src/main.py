@@ -19,7 +19,7 @@ from .api import admin, analyze, routes
 from .core.config import config
 from .core.database import Database
 from .core.logger import logger, setup_logging
-from .core.paths import STATIC_DIR, ensure_runtime_dirs
+from .core.paths import GENERATED_IMAGES_DIR, STATIC_DIR, ensure_runtime_dirs
 from .services import browser_extension_bridge
 
 
@@ -265,6 +265,8 @@ static_dir = STATIC_DIR
 assets_dir = static_dir / "assets"
 assets_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+GENERATED_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/static/generated_images", StaticFiles(directory=str(GENERATED_IMAGES_DIR)), name="generated_images")
 
 
 def _page(path: Path) -> Response:
@@ -301,6 +303,11 @@ async def admin_task_types_page():
 @app.get("/admin/tasks", response_class=HTMLResponse)
 async def admin_tasks_page():
     return _page(static_dir / "tasks.html")
+
+
+@app.get("/admin/chat", response_class=HTMLResponse)
+async def admin_chat_page():
+    return _page(static_dir / "chat_workbench.html")
 
 
 @app.get("/admin/watermark-tasks", response_class=HTMLResponse)
