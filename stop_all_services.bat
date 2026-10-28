@@ -3,8 +3,14 @@ setlocal
 chcp 65001 >nul
 title AI号池全套服务停止器
 
+cd /d "%~dp0"
+
 set "PY_EXE=python"
-if exist "D:\Program Files\anaconda3\python.exe" set "PY_EXE=D:\Program Files\anaconda3\python.exe"
+if exist "D:\Program Files\anaconda3\python.exe" (
+    set "PY_EXE=D:\Program Files\anaconda3\python.exe"
+) else if exist "D:\Python313\python.exe" (
+    set "PY_EXE=D:\Python313\python.exe"
+)
 
 echo ========================================================
 echo   正在停止全套 AI 号池服务 (WARP代理 + VB + 网关)...

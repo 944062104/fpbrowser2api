@@ -1,26 +1,21 @@
-"""AI 号池双服务跨平台一键启动器 (VirtualBrowser + FPBrowser2API)
-============================================================
-基于纯 Python 实现，零平台依赖 (通用于 Windows / Linux / macOS)。
-按顺序检测并异步拉起双端服务，提供统一运行日志与管理链接。
+"""跨平台 AI 号池服务一键启动管理脚本。
+
+按顺序启动并守护：
+1. SSH WARP 代理桥（端口 40001~40005，多节点透明映射）
+2. VirtualBrowser API（端口 9000，指纹浏览器管理服务）
+3. FPBrowser2API（端口 8000，OpenAI 兼容调度网关）
 """
 
 import os
-import socket
-import subprocess
 import sys
 import time
+import socket
+import subprocess
 from pathlib import Path
-
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
 
 
 def is_port_listening(port: int, host: str = "127.0.0.1") -> bool:
-    """检查指定端口是否已处于监听状态"""
+    """检查指定端口是否处于监听状态"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.5)
         return s.connect_ex((host, port)) == 0
@@ -33,12 +28,15 @@ def get_python_exe() -> str:
     conda_py = Path(r"D:\Program Files\anaconda3\python.exe")
     if conda_py.is_file():
         return str(conda_py)
+    py313 = Path(r"D:\Python313\python.exe")
+    if py313.is_file():
+        return str(py313)
     return sys.executable
 
 
 def main():
-    root_dir = Path(__file__).parent.resolve()
-    vb_server_dir = (root_dir.parent / "VirtualBrowser" / "api_server").resolve()
+    root_dir = Path(__file__).resolve().parent
+    vb_server_dir = root_dir.parent / "VirtualBrowser" / "api_server"
     py_exe = get_python_exe()
 
     print("=" * 65)
@@ -81,8 +79,7 @@ def main():
     if is_port_listening(9000):
         print("   ✅ VirtualBrowser API 服务已在运行 (端口 9000)")
     else:
-        server_py = vb_server_dir / "server.py"
-        if server_py.is_file():
+        if (vb_server_dir / "server.py").is_file():
             print("   ▶️ 正在启动 VirtualBrowser API 服务...")
             popen_kwargs: dict = {"cwd": str(vb_server_dir)}
             if sys.platform == "win32":
@@ -108,8 +105,7 @@ def main():
     if is_port_listening(8000):
         print("   ✅ FPBrowser2API 网关已在运行 (端口 8000)")
     else:
-        main_py = root_dir / "main.py"
-        if main_py.is_file():
+        if (root_dir / "main.py").is_file():
             print("   ▶️ 正在启动 FPBrowser2API 网关...")
             popen_kwargs = {"cwd": str(root_dir)}
             if sys.platform == "win32":

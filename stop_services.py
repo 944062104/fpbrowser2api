@@ -1,41 +1,41 @@
-"""AI 号池双服务跨平台停止器 (VirtualBrowser & FPBrowser2API)
-============================================================
-基于纯 Python psutil 实现，完全消除操作系统差异 (跨平台通用于 Windows / Linux / macOS)。
-按端口精准定位监听服务，安全杀死进程及其所有子孙进程。
+"""跨平台安全服务停止脚本。
+
+按端口定位并优雅终止正在运行的 9000 (VirtualBrowser), 8000 (FPBrowser2API), 40001~40005 (SSH WARP 代理桥) 进程及其子进程树。
+优先保护外部正在运行的系统代理工具（如 proxy app / Clash / v2ray 等）。
 """
 
 import sys
 import time
+import psutil
 
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
-
-try:
-    import psutil
-except ImportError:
-    print("[错误] 缺少 psutil 库，请先安装: pip install psutil")
-    sys.exit(1)
+ALL_SERVICE_PORTS = (9000, 8000, 40001, 40002, 40003, 40004, 40005)
 
 
 def kill_proc_tree(proc: psutil.Process) -> None:
-    """递归杀死进程树"""
+    """递归终止进程及其所有子进程"""
     try:
         children = proc.children(recursive=True)
         for child in children:
             try:
-                child.kill()
+                child.terminate()
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
-        proc.kill()
+        gone, alive = psutil.wait_procs(children, timeout=2)
+        for p in alive:
+            try:
+                p.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+        proc.terminate()
+        proc.wait(timeout=2)
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         pass
-
-
-ALL_SERVICE_PORTS = (9000, 8000, 40001, 40002, 40003, 40004, 40005)
+    except psutil.TimeoutExpired:
+        try:
+            proc.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
 
 
 def stop_port_listeners(ports=ALL_SERVICE_PORTS) -> int:
@@ -43,26 +43,22 @@ def stop_port_listeners(ports=ALL_SERVICE_PORTS) -> int:
     stopped_count = 0
     killed_pids = set()
 
-    try:
-        connections = psutil.net_connections(kind="inet")
-    except Exception as e:
-        # 某些 Linux/macOS 权限受限场景回退
-        connections = []
-        for p in psutil.process_iter(["pid", "name"]):
-            try:
-                for c in p.net_connections():
-                    connections.append(c)
-            except Exception:
-                continue
-
-    for conn in connections:
-        if conn.status == psutil.CONN_LISTEN and conn.laddr and conn.laddr.port in ports:
-            pid = conn.pid
-            if pid and pid not in killed_pids:
+    for conn in psutil.net_connections(kind="inet"):
+        if conn.status == psutil.CONN_LISTEN and conn.laddr:
+            port = conn.laddr.port
+            if port in ports and conn.pid:
+                pid = conn.pid
+                if pid in killed_pids or pid == 0:
+                    continue
                 try:
                     proc = psutil.Process(pid)
-                    pname = proc.name()
-                    print(f"[*] 正在关闭端口 {conn.laddr.port} 上的服务: {pname} [PID: {pid}]...")
+                    pname = proc.name().lower()
+
+                    # 保护常用系统代理/梯子进程，避免误杀
+                    if any(x in pname for x in ("clash", "sing-box", "v2ray", "xray", "nekoray", "shadowsocks")):
+                        continue
+
+                    print(f"[*] 正在关闭端口 {port} 的服务进程: {proc.name()} [PID: {pid}]...")
                     kill_proc_tree(proc)
                     killed_pids.add(pid)
                     stopped_count += 1
@@ -70,6 +66,16 @@ def stop_port_listeners(ports=ALL_SERVICE_PORTS) -> int:
                     pass
                 except Exception as e:
                     print(f"[!] 关闭 PID={pid} 失败: {e}")
+
+    # 清理 mihomo 代理进程
+    for p in psutil.process_iter(["pid", "name"]):
+        try:
+            if "mihomo" in p.info["name"].lower():
+                print(f"[*] 正在关闭代理进程: {p.info['name']} [PID: {p.info['pid']}]...")
+                kill_proc_tree(p)
+                stopped_count += 1
+        except Exception:
+            pass
 
     return stopped_count
 
