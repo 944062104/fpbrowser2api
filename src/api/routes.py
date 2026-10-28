@@ -1330,9 +1330,35 @@ async def upload_internal_asset(body: InternalAssetUploadRequest = Body(...)):
         except Exception:
             pass
 
+    task_prompt = ""
+    task_model = ""
+    if task_id_clean and active_db is not None:
+        try:
+            t_row = await active_db.get_task(task_id_clean)
+            if t_row and t_row.get("prompt"):
+                raw_p = t_row["prompt"]
+                try:
+                    p_obj = json.loads(raw_p)
+                    task_prompt = p_obj.get("prompt") or p_obj.get("text") or raw_p
+                    task_model = p_obj.get("model", "")
+                except Exception:
+                    task_prompt = raw_p
+        except Exception:
+            pass
+
     if active_db is not None:
         try:
-            asset_name = f"{provider.upper()}生图_{task_id_clean or filename[:12]}"
+            asset_name = task_prompt[:35] if task_prompt else f"{provider.upper()}生图_{task_id_clean or filename[:12]}"
+            meta_payload = {
+                "source": "internal_asset_upload",
+                "filename": filename,
+                "prefix": body.prefix,
+            }
+            if task_prompt:
+                meta_payload["prompt"] = task_prompt
+            if task_model:
+                meta_payload["model"] = task_model
+
             await active_db.create_image_asset(
                 provider=provider,
                 category="generated",
@@ -1341,11 +1367,7 @@ async def upload_internal_asset(body: InternalAssetUploadRequest = Body(...)):
                 task_id=task_id_clean or None,
                 size_bytes=len(raw_bytes),
                 mime=mime_type,
-                meta_json={
-                    "source": "internal_asset_upload",
-                    "filename": filename,
-                    "prefix": body.prefix,
-                },
+                meta_json=meta_payload,
             )
         except Exception as e:
             logger.warning("auto-register image_asset failed: %s", e)

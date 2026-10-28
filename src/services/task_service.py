@@ -2560,9 +2560,9 @@ class TaskService:
             prompt = payload.get("prompt") or payload.get("text") or ""
 
         for idx, u in enumerate(dedup_urls):
-            name = f"{provider.upper()}生图_{task_id[:8]}"
+            name = prompt[:35] if prompt else f"{provider.upper()}生图_{task_id[:8]}"
             if len(dedup_urls) > 1:
-                name += f"_{idx + 1}"
+                name += f" ({idx + 1})"
             try:
                 await self.db.create_image_asset(
                     provider=provider,

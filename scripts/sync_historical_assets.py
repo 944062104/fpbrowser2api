@@ -45,49 +45,62 @@ async def sync():
 
     async with db._read_conn() as conn:
         conn.row_factory = __import__("aiosqlite").Row
-        cur = await conn.execute("SELECT id, prompt, result_json, image_path, created_at FROM tasks WHERE status='completed'")
-        completed_tasks = {str(r["id"]): dict(r) for r in await cur.fetchall()}
+        cur = await conn.execute("SELECT id, task_id, prompt, result_json, image_path, created_at FROM tasks")
+        all_tasks = [dict(r) for r in await cur.fetchall()]
+
+    by_task_id = {}
+    by_image_filename = {}
+    for t in all_tasks:
+        tid = str(t.get("task_id") or "").strip()
+        if tid:
+            by_task_id[tid] = t
+        ipath = str(t.get("image_path") or "").strip()
+        if ipath:
+            fname = Path(ipath).name
+            by_image_filename[fname] = t
 
     registered_count = 0
     for f in sorted(files, key=lambda x: x.stat().st_mtime):
         filename = f.name
-        # Skip small test dummy files if needed, or register real generated images
+        # Skip small test dummy files if needed
         if f.stat().st_size < 100 and "test" in filename:
             continue
 
         local_url = f"/static/generated_images/{filename}"
-        base_name = f.stem
 
-        # Try to find corresponding task
-        matched_task = None
-        for tid, t in completed_tasks.items():
-            if tid in filename or (t.get("image_path") and filename in str(t["image_path"])):
-                matched_task = t
-                break
-            # Check if filename is in result_json
-            rj = str(t.get("result_json") or "")
-            if filename in rj:
-                matched_task = t
-                break
+        # Match candidate 1: exact image_path filename
+        matched_task = by_image_filename.get(filename)
+        # Match candidate 2: exact task_id (or stem before _)
+        if not matched_task:
+            stem_clean = f.stem.split("_")[0]
+            matched_task = by_task_id.get(stem_clean) or by_task_id.get(f.stem)
 
         provider = "gpt"
         prompt = ""
         task_id = None
+        model = ""
         if matched_task:
-            task_id = str(matched_task["id"])
-            prompt = matched_task.get("prompt") or ""
+            task_id = str(matched_task.get("task_id") or matched_task.get("id"))
+            p_raw = matched_task.get("prompt") or ""
+            try:
+                p_obj = json.loads(p_raw)
+                prompt = p_obj.get("prompt") or p_obj.get("text") or p_raw
+                model = p_obj.get("model", "")
+            except Exception:
+                prompt = p_raw
+
             if "dreamina" in str(matched_task.get("result_json") or ""):
                 provider = "dreamina"
 
-        name = f"生图_{task_id or base_name[:12]}"
-        if prompt:
-            name = prompt[:24]
+        name = prompt[:35] if prompt else f"生图_{task_id or f.stem[:12]}"
 
         meta = {
             "filename": filename,
             "source": "local_generated_images",
             "prompt": prompt,
         }
+        if model:
+            meta["model"] = model
 
         aid = await db.create_image_asset(
             provider=provider,
