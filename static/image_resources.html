@@ -3,16 +3,66 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>图片资源 - Mirr矩阵</title>
+    <title>全局图片资产中心 - Mirr矩阵</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
     <link href="/assets/admin-nav.css" rel="stylesheet" />
     <link href="/assets/admin-theme.css" rel="stylesheet" />
     <style>
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+      .gallery-card {
+        transition: transform 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .gallery-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.12) !important;
+      }
+      .thumb-container {
+        position: relative;
+        width: 100%;
+        height: 180px;
+        background-color: #f8f9fa;
+        background-image: linear-gradient(45deg, #eee 25%, transparent 25%),
+                          linear-gradient(-45deg, #eee 25%, transparent 25%),
+                          linear-gradient(45deg, transparent 75%, #eee 75%),
+                          linear-gradient(-45deg, transparent 75%, #eee 75%);
+        background-size: 16px 16px;
+        background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        cursor: pointer;
+      }
+      .thumb-img {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+      }
+      .badge-provider {
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .filter-pill {
+        cursor: pointer;
+        user-select: none;
+        transition: all 0.2s ease;
+      }
+      .filter-pill.active {
+        box-shadow: 0 2px 6px rgba(13, 110, 253, 0.35);
+      }
+      .text-truncate-2 {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
     </style>
   </head>
   <body class="bg-light">
-    <div id="toastContainer" class="toast-container position-fixed bottom-0 end-0 p-3"></div>
+    <div id="toastContainer" class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index: 1090;"></div>
     <nav class="navbar navbar-dark bg-dark admin-top-nav">
       <div class="container-fluid">
         <a class="navbar-brand" href="/admin/system">Mirr矩阵</a>
@@ -22,7 +72,7 @@
           <a class="nav-link" data-nav="task_types" href="/admin/task-types">任务类型管理</a>
           <a class="nav-link" data-nav="tasks" href="/admin/tasks">任务列表</a>
           <a class="nav-link" data-nav="test" href="/admin/test">测试</a>
-          <a class="nav-link" data-nav="image_resources" href="/admin/image-resources">图片资源</a>
+          <a class="nav-link active" data-nav="image_resources" href="/admin/image-resources">图片资源</a>
           <a class="nav-link" data-nav="totp" href="/admin/totp">2FA生成</a>
           <a class="nav-link" data-nav="logs" href="/admin/logs">请求日志</a>
           <a class="nav-link" data-nav="users" href="/admin/users">用户管理</a>
@@ -36,36 +86,177 @@
       </div>
     </nav>
 
-    <div class="container py-4">
-      <div class="card shadow-sm">
-        <div class="card-body">
-          <div class="d-flex align-items-center mb-3 gap-2">
-            <h5 class="card-title mb-0">图片角色资源管理</h5>
-            <button class="btn btn-outline-secondary btn-sm ms-auto" id="btnRefresh">刷新</button>
-          </div>
-          <div class="table-responsive">
-            <table class="table table-sm table-striped align-middle mb-0">
-              <thead>
-                <tr>
-                  <th style="width:80px;">ID</th>
-                  <th style="width:180px;">name</th>
-                  <th style="width:170px;">uid</th>
-                  <th>内部地址</th>
-                  <th style="width:120px;">尺寸</th>
-                  <th style="width:150px;">subject_id</th>
-                  <th style="width:150px;">data_id</th>
-                  <th style="width:170px;">创建时间</th>
-                </tr>
-              </thead>
-              <tbody id="tbody"></tbody>
-            </table>
-          </div>
-          <div class="d-flex align-items-center justify-content-between border-top pt-3 mt-3">
-            <span class="text-muted small" id="pageInfo"></span>
-            <div class="btn-group btn-group-sm">
-              <button class="btn btn-outline-secondary" id="btnPrev">上一页</button>
-              <button class="btn btn-outline-secondary" id="btnNext">下一页</button>
+    <div class="container-fluid px-4 py-4">
+      <!-- 顶部控制栏 -->
+      <div class="card shadow-sm mb-3">
+        <div class="card-body py-3">
+          <div class="row g-2 align-items-center">
+            <div class="col-12 col-md-4">
+              <h5 class="mb-0 fw-bold d-flex align-items-center gap-2">
+                <span>🖼️ 全局图片资产中心</span>
+                <span class="badge bg-secondary rounded-pill fs-6 fw-normal" id="totalBadge">0</span>
+              </h5>
             </div>
+            <div class="col-12 col-md-5">
+              <div class="input-group input-group-sm">
+                <input type="text" class="form-control" id="searchInput" placeholder="搜索资产名称、Prompt、Task ID..." />
+                <button class="btn btn-outline-primary" id="btnSearch">搜索</button>
+                <button class="btn btn-outline-secondary" id="btnClearSearch">清空</button>
+              </div>
+            </div>
+            <div class="col-12 col-md-3 text-md-end">
+              <button class="btn btn-primary btn-sm me-1" id="btnUploadModal">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-cloud-arrow-up me-1" viewBox="0 0 16 16">
+                  <path fill-rule="evenodd" d="M7.646 5.146a.5.5 0 0 1 .708 0l2 2a.5.5 0 0 1-.708.708L8.5 6.707V10.5a.5.5 0 0 1-1 0V6.707L6.354 7.854a.5.5 0 1 1-.708-.708z"/>
+                  <path d="M4.406 3.342A5.53 5.53 0 0 1 8 2c2.69 0 4.923 2 5.166 4.579A3.95 3.95 0 0 1 16 9.5a4 4 0 0 1-4 4H4a4 4 0 0 1-3.992-3.83A5.002 5.002 0 0 1 4.06 3.342z"/>
+                </svg>
+                上传素材
+              </button>
+              <button class="btn btn-outline-secondary btn-sm" id="btnRefresh">刷新</button>
+            </div>
+          </div>
+
+          <!-- 动态过滤器胶囊条 -->
+          <div class="border-top pt-3 mt-3">
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-2" id="providerFilterBar">
+              <span class="text-muted small me-1">平台:</span>
+              <span class="badge bg-primary filter-pill active" data-provider="all">全部</span>
+            </div>
+            <div class="d-flex flex-wrap align-items-center gap-2" id="categoryFilterBar">
+              <span class="text-muted small me-1">类型:</span>
+              <span class="badge bg-secondary filter-pill active" data-category="all">全部</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 图片网格展示区 -->
+      <div class="row g-3" id="galleryGrid">
+        <div class="col-12 text-center text-muted py-5">正在加载资产库...</div>
+      </div>
+
+      <!-- 分页栏 -->
+      <div class="card shadow-sm mt-3">
+        <div class="card-body py-2 d-flex align-items-center justify-content-between">
+          <span class="text-muted small" id="pageInfo">共 0 条</span>
+          <div class="btn-group btn-group-sm">
+            <button class="btn btn-outline-secondary" id="btnPrev" disabled>上一页</button>
+            <button class="btn btn-outline-secondary" id="btnNext" disabled>下一页</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 图片详情弹窗 -->
+    <div class="modal fade" id="detailModal" tabindex="-1" aria-labelledby="detailModalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header py-2">
+            <h6 class="modal-title fw-bold" id="detailModalLabel">资产详情</h6>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body p-3">
+            <div class="row g-3">
+              <div class="col-12 col-md-6 text-center bg-dark rounded d-flex align-items-center justify-content-center p-2" style="min-height: 280px; max-height: 480px; overflow: hidden;">
+                <img id="modalPreviewImg" src="" class="img-fluid rounded" style="max-height: 460px; object-fit: contain;" alt="预览" />
+              </div>
+              <div class="col-12 col-md-6">
+                <div class="table-responsive">
+                  <table class="table table-sm table-bordered align-middle small mb-0">
+                    <tbody>
+                      <tr>
+                        <th class="bg-light" style="width: 32%;">ID</th>
+                        <td id="modalId" class="mono"></td>
+                      </tr>
+                      <tr>
+                        <th class="bg-light">名称</th>
+                        <td id="modalName" class="fw-semibold"></td>
+                      </tr>
+                      <tr>
+                        <th class="bg-light">平台 / 分类</th>
+                        <td>
+                          <span id="modalProvider" class="badge bg-primary me-1"></span>
+                          <span id="modalCategory" class="badge bg-secondary"></span>
+                        </td>
+                      </tr>
+                      <tr>
+                        <th class="bg-light">规格</th>
+                        <td><span id="modalDimensions"></span> | <span id="modalSize"></span></td>
+                      </tr>
+                      <tr>
+                        <th class="bg-light">Task ID</th>
+                        <td id="modalTaskId" class="mono text-break"></td>
+                      </tr>
+                      <tr>
+                        <th class="bg-light">创建时间</th>
+                        <td id="modalCreatedAt" class="mono"></td>
+                      </tr>
+                      <tr>
+                        <th class="bg-light">URL 路径</th>
+                        <td class="text-break">
+                          <div class="d-flex align-items-center gap-1">
+                            <span id="modalUrl" class="mono small text-truncate" style="max-width: 170px;"></span>
+                            <button class="btn btn-outline-secondary btn-xs py-0 px-1" id="btnCopyUrl" title="复制链接">复制</button>
+                            <a id="modalLink" href="" target="_blank" class="btn btn-outline-primary btn-xs py-0 px-1">打开</a>
+                          </div>
+                        </td>
+                      </tr>
+                      <tr>
+                        <th class="bg-light">Prompt / 描述</th>
+                        <td id="modalPrompt" class="text-break" style="max-height: 120px; overflow-y: auto;"></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="mt-2" id="modalMetaBox" style="display: none;">
+                  <span class="small text-muted fw-semibold">拓展参数 (Meta JSON):</span>
+                  <pre id="modalMetaJson" class="p-2 bg-light border rounded small mono mb-0 mt-1" style="max-height: 120px; overflow-y: auto; font-size: 0.75rem;"></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer py-2">
+            <a id="btnDownloadAsset" href="" download class="btn btn-outline-success btn-sm">下载原图</a>
+            <button type="button" class="btn btn-danger btn-sm" id="btnDeleteCurrent">删除资产</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">关闭</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 上传素材弹窗 -->
+    <div class="modal fade" id="uploadModal" tabindex="-1" aria-labelledby="uploadModalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header py-2">
+            <h6 class="modal-title fw-bold" id="uploadModalLabel">上传新素材 / 图片</h6>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body p-3">
+            <form id="uploadForm">
+              <div class="mb-3">
+                <label class="form-label small fw-semibold">选择图片文件 (PNG, JPG, WEBP, GIF, SVG)</label>
+                <input type="file" class="form-control form-control-sm" id="uploadFileInput" accept="image/*" required />
+              </div>
+              <div class="mb-3">
+                <label class="form-label small fw-semibold">素材名称 (选填)</label>
+                <input type="text" class="form-control form-control-sm" id="uploadNameInput" placeholder="默认使用原始文件名" />
+              </div>
+              <div class="row g-2 mb-3">
+                <div class="col-6">
+                  <label class="form-label small fw-semibold">平台标签</label>
+                  <input type="text" class="form-control form-control-sm" id="uploadProviderInput" value="custom" placeholder="例如: custom, gpt, dreamina" />
+                </div>
+                <div class="col-6">
+                  <label class="form-label small fw-semibold">分类标签</label>
+                  <input type="text" class="form-control form-control-sm" id="uploadCategoryInput" value="upload" placeholder="例如: upload, reference" />
+                </div>
+              </div>
+            </form>
+          </div>
+          <div class="modal-footer py-2">
+            <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-primary btn-sm" id="btnSubmitUpload">开始上传</button>
           </div>
         </div>
       </div>
@@ -74,33 +265,234 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script type="module">
       import { adminFetch, toast, setActiveNav, logout, escapeHtml, initAdminPage } from "/assets/app.js";
+
       initAdminPage("image_resources");
       setActiveNav("image_resources");
       document.getElementById("btnLogout").addEventListener("click", logout);
 
-      let limit = 50;
+      let limit = 48;
       let offset = 0;
       let total = 0;
+      let currentProvider = "all";
+      let currentCategory = "all";
+      let currentQuery = "";
+      let currentViewingAsset = null;
 
-      function render(items) {
-        const tbody = document.getElementById("tbody");
-        if (!items.length) {
-          tbody.innerHTML = `<tr><td colspan="8" class="text-center text-muted py-4">暂无图片资源</td></tr>`;
-        } else {
-          tbody.innerHTML = items.map(x => {
-            const uri = String(x.image_uri || "");
-            return `<tr>
-              <td class="mono">${escapeHtml(String(x.id || ""))}</td>
-              <td>${escapeHtml(x.name || "")}</td>
-              <td class="mono small">${escapeHtml(x.uid || "")}</td>
-              <td class="mono small text-break">${escapeHtml(uri)}</td>
-              <td class="mono">${escapeHtml(String(x.width || 0))}×${escapeHtml(String(x.height || 0))}</td>
-              <td class="mono small">${escapeHtml(x.subject_id || "")}</td>
-              <td class="mono small">${escapeHtml(x.data_id || "")}</td>
-              <td class="mono small">${escapeHtml(x.created_at || "")}</td>
-            </tr>`;
-          }).join("");
+      const detailModal = new bootstrap.Modal(document.getElementById("detailModal"));
+      const uploadModal = new bootstrap.Modal(document.getElementById("uploadModal"));
+
+      const PROVIDER_COLORS = {
+        gpt: "bg-success text-white",
+        dreamina: "bg-primary text-white",
+        veo: "bg-warning text-dark",
+        custom: "bg-info text-dark",
+        unknown: "bg-secondary text-white",
+      };
+
+      function getProviderBadgeClass(provider) {
+        const p = String(provider || "").toLowerCase();
+        return PROVIDER_COLORS[p] || "bg-secondary text-white";
+      }
+
+      function formatSize(bytes) {
+        if (!bytes || bytes <= 0) return "-";
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+        return (bytes / (1024 * 1024)).toFixed(2) + " MB";
+      }
+
+      async function loadFilters() {
+        const r = await adminFetch("/api/admin/image-resources/filters");
+        if (!r || !r.ok) return;
+        const d = await r.json();
+        if (!d.success) return;
+
+        // Render Providers
+        const pBar = document.getElementById("providerFilterBar");
+        const totalCount = d.total || 0;
+        let phtml = `<span class="text-muted small me-1">平台:</span>`;
+        phtml += `<span class="badge ${currentProvider === 'all' ? 'bg-primary' : 'bg-light text-dark border'} filter-pill ${currentProvider === 'all' ? 'active' : ''}" data-provider="all">全部 (${totalCount})</span>`;
+
+        (d.providers || []).forEach(p => {
+          const isAct = currentProvider === p.name;
+          phtml += `<span class="badge ${isAct ? 'bg-primary' : 'bg-light text-dark border'} filter-pill ${isAct ? 'active' : ''}" data-provider="${escapeHtml(p.name)}">${escapeHtml(p.name.toUpperCase())} (${p.count})</span>`;
+        });
+        pBar.innerHTML = phtml;
+
+        // Bind clicks
+        pBar.querySelectorAll(".filter-pill").forEach(el => {
+          el.addEventListener("click", () => {
+            currentProvider = el.getAttribute("data-provider") || "all";
+            offset = 0;
+            loadFilters();
+            loadItems();
+          });
+        });
+
+        // Render Categories
+        const cBar = document.getElementById("categoryFilterBar");
+        let chtml = `<span class="text-muted small me-1">类型:</span>`;
+        chtml += `<span class="badge ${currentCategory === 'all' ? 'bg-secondary' : 'bg-light text-dark border'} filter-pill ${currentCategory === 'all' ? 'active' : ''}" data-category="all">全部</span>`;
+
+        (d.categories || []).forEach(c => {
+          const isAct = currentCategory === c.name;
+          chtml += `<span class="badge ${isAct ? 'bg-secondary' : 'bg-light text-dark border'} filter-pill ${isAct ? 'active' : ''}" data-category="${escapeHtml(c.name)}">${escapeHtml(c.name)} (${c.count})</span>`;
+        });
+        cBar.innerHTML = chtml;
+
+        cBar.querySelectorAll(".filter-pill").forEach(el => {
+          el.addEventListener("click", () => {
+            currentCategory = el.getAttribute("data-category") || "all";
+            offset = 0;
+            loadFilters();
+            loadItems();
+          });
+        });
+      }
+
+      function renderCards(items) {
+        const grid = document.getElementById("galleryGrid");
+        if (!items || items.length === 0) {
+          grid.innerHTML = `
+            <div class="col-12 text-center text-muted py-5">
+              <div class="fs-1 mb-2">🖼️</div>
+              <p>暂无符合条件的图片资产</p>
+            </div>
+          `;
+          return;
         }
+
+        grid.innerHTML = items.map(item => {
+          const url = escapeHtml(item.url || "");
+          const name = escapeHtml(item.name || "未命名");
+          const provider = escapeHtml(item.provider || "unknown");
+          const category = escapeHtml(item.category || "generated");
+          const pBadge = getProviderBadgeClass(item.provider);
+          const sizeStr = formatSize(item.size_bytes);
+          const dimStr = (item.width && item.height) ? `${item.width}×${item.height}` : "";
+
+          let promptStr = "";
+          if (item.meta_json && typeof item.meta_json === "object") {
+            promptStr = item.meta_json.prompt || item.meta_json.text || "";
+          }
+
+          return `
+            <div class="col-6 col-sm-4 col-md-3 col-lg-2">
+              <div class="card gallery-card h-100 shadow-sm border-0 position-relative">
+                <div class="thumb-container" data-action="view" data-id="${item.id}">
+                  <img src="${url}" class="thumb-img" loading="lazy" alt="${name}" onerror="this.src='/favicon.ico'; this.style.opacity=0.3;" />
+                  <span class="badge ${pBadge} position-absolute top-0 start-0 m-2 badge-provider shadow-sm">${provider}</span>
+                </div>
+                <div class="card-body p-2 d-flex flex-column justify-content-between">
+                  <div>
+                    <div class="fw-semibold small text-truncate" title="${name}">${name}</div>
+                    ${promptStr ? `<div class="text-muted small text-truncate-2 mt-1" style="font-size: 0.75rem;" title="${escapeHtml(promptStr)}">${escapeHtml(promptStr)}</div>` : ''}
+                  </div>
+                  <div class="d-flex align-items-center justify-content-between mt-2 pt-2 border-top small text-muted" style="font-size: 0.72rem;">
+                    <span>${dimStr || sizeStr || category}</span>
+                    <div class="btn-group btn-group-sm">
+                      <button class="btn btn-outline-primary btn-xs py-0 px-1" data-action="view" data-id="${item.id}" title="查看详情">详情</button>
+                      <button class="btn btn-outline-danger btn-xs py-0 px-1" data-action="delete" data-id="${item.id}" title="删除">删</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join("");
+
+        // Bind click events on card elements
+        grid.querySelectorAll("[data-action='view']").forEach(btn => {
+          btn.addEventListener("click", () => {
+            const id = Number(btn.getAttribute("data-id"));
+            const asset = items.find(x => x.id === id);
+            if (asset) showDetail(asset);
+          });
+        });
+
+        grid.querySelectorAll("[data-action='delete']").forEach(btn => {
+          btn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const id = Number(btn.getAttribute("data-id"));
+            if (!confirm(`确定要删除此图片资产 (ID: ${id}) 吗？`)) return;
+            await deleteAsset(id);
+          });
+        });
+      }
+
+      function showDetail(asset) {
+        currentViewingAsset = asset;
+        document.getElementById("modalPreviewImg").src = asset.url || "";
+        document.getElementById("modalId").textContent = asset.id || "";
+        document.getElementById("modalName").textContent = asset.name || "";
+        document.getElementById("modalProvider").textContent = (asset.provider || "UNKNOWN").toUpperCase();
+        document.getElementById("modalProvider").className = `badge ${getProviderBadgeClass(asset.provider)} me-1`;
+        document.getElementById("modalCategory").textContent = asset.category || "";
+        document.getElementById("modalDimensions").textContent = (asset.width && asset.height) ? `${asset.width} × ${asset.height}` : "未知尺寸";
+        document.getElementById("modalSize").textContent = formatSize(asset.size_bytes);
+        document.getElementById("modalTaskId").textContent = asset.task_id || "-";
+        document.getElementById("modalCreatedAt").textContent = asset.created_at || "-";
+        document.getElementById("modalUrl").textContent = asset.url || "";
+        document.getElementById("modalLink").href = asset.url || "#";
+        document.getElementById("btnDownloadAsset").href = asset.url || "#";
+
+        let promptText = "-";
+        if (asset.meta_json && typeof asset.meta_json === "object") {
+          promptText = asset.meta_json.prompt || asset.meta_json.text || "-";
+        }
+        document.getElementById("modalPrompt").textContent = promptText;
+
+        const metaBox = document.getElementById("modalMetaBox");
+        const metaJson = document.getElementById("modalMetaJson");
+        if (asset.meta_json && Object.keys(asset.meta_json).length > 0) {
+          metaBox.style.display = "block";
+          metaJson.textContent = JSON.stringify(asset.meta_json, null, 2);
+        } else {
+          metaBox.style.display = "none";
+        }
+
+        detailModal.show();
+      }
+
+      async function deleteAsset(id) {
+        const r = await adminFetch(`/api/admin/image-resources/${id}`, { method: "DELETE" });
+        if (!r) return;
+        const d = await r.json();
+        if (r.ok && d.success) {
+          toast("删除成功", "success");
+          detailModal.hide();
+          loadFilters();
+          loadItems();
+        } else {
+          toast(d.detail || "删除失败", "error");
+        }
+      }
+
+      async function loadItems() {
+        let url = `/api/admin/image-resources?limit=${limit}&offset=${offset}`;
+        if (currentProvider && currentProvider !== "all") {
+          url += `&provider=${encodeURIComponent(currentProvider)}`;
+        }
+        if (currentCategory && currentCategory !== "all") {
+          url += `&category=${encodeURIComponent(currentCategory)}`;
+        }
+        if (currentQuery) {
+          url += `&q=${encodeURIComponent(currentQuery)}`;
+        }
+
+        const r = await adminFetch(url);
+        if (!r) return;
+        const d = await r.json();
+        if (!r.ok || !d.success) {
+          toast(d.detail || "加载失败", "error");
+          return;
+        }
+
+        total = Number(d.total || 0);
+        document.getElementById("totalBadge").textContent = total;
+        const items = Array.isArray(d.items) ? d.items : [];
+        renderCards(items);
+
         const start = total ? offset + 1 : 0;
         const end = Math.min(total, offset + limit);
         document.getElementById("pageInfo").textContent = `共 ${total} 条，当前 ${start}-${end}`;
@@ -108,22 +500,109 @@
         document.getElementById("btnNext").disabled = offset + limit >= total;
       }
 
-      async function load() {
-        const r = await adminFetch(`/api/admin/image-resources?limit=${limit}&offset=${offset}`);
-        if (!r) return;
-        const d = await r.json();
-        if (!r.ok || !d.success) {
-          toast(d.detail || "加载失败", "error");
+      // UI Bindings
+      document.getElementById("btnRefresh").addEventListener("click", () => {
+        loadFilters();
+        loadItems();
+      });
+
+      document.getElementById("btnSearch").addEventListener("click", () => {
+        currentQuery = (document.getElementById("searchInput").value || "").trim();
+        offset = 0;
+        loadItems();
+      });
+
+      document.getElementById("searchInput").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          currentQuery = (document.getElementById("searchInput").value || "").trim();
+          offset = 0;
+          loadItems();
+        }
+      });
+
+      document.getElementById("btnClearSearch").addEventListener("click", () => {
+        document.getElementById("searchInput").value = "";
+        currentQuery = "";
+        offset = 0;
+        loadItems();
+      });
+
+      document.getElementById("btnPrev").addEventListener("click", () => {
+        offset = Math.max(0, offset - limit);
+        loadItems();
+      });
+
+      document.getElementById("btnNext").addEventListener("click", () => {
+        if (offset + limit < total) {
+          offset += limit;
+          loadItems();
+        }
+      });
+
+      document.getElementById("btnCopyUrl").addEventListener("click", () => {
+        const url = document.getElementById("modalUrl").textContent;
+        if (url) {
+          navigator.clipboard.writeText(window.location.origin + url);
+          toast("链接已复制到剪贴板", "success");
+        }
+      });
+
+      document.getElementById("btnDeleteCurrent").addEventListener("click", async () => {
+        if (!currentViewingAsset) return;
+        if (confirm(`确定删除资产 ID: ${currentViewingAsset.id} 吗？`)) {
+          await deleteAsset(currentViewingAsset.id);
+        }
+      });
+
+      // Upload Handling
+      document.getElementById("btnUploadModal").addEventListener("click", () => {
+        document.getElementById("uploadForm").reset();
+        uploadModal.show();
+      });
+
+      document.getElementById("btnSubmitUpload").addEventListener("click", async () => {
+        const fileInput = document.getElementById("uploadFileInput");
+        if (!fileInput.files || !fileInput.files[0]) {
+          toast("请先选择图片文件", "warning");
           return;
         }
-        total = Number(d.total || 0);
-        render(Array.isArray(d.items) ? d.items : []);
-      }
 
-      document.getElementById("btnRefresh").addEventListener("click", () => load());
-      document.getElementById("btnPrev").addEventListener("click", () => { offset = Math.max(0, offset - limit); load(); });
-      document.getElementById("btnNext").addEventListener("click", () => { if (offset + limit < total) { offset += limit; load(); } });
-      load();
+        const formData = new FormData();
+        formData.append("file", fileInput.files[0]);
+        formData.append("provider", document.getElementById("uploadProviderInput").value || "custom");
+        formData.append("category", document.getElementById("uploadCategoryInput").value || "upload");
+        formData.append("name", document.getElementById("uploadNameInput").value || "");
+
+        const submitBtn = document.getElementById("btnSubmitUpload");
+        submitBtn.disabled = true;
+        submitBtn.textContent = "上传中...";
+
+        try {
+          const r = await adminFetch("/api/admin/image-resources/upload", {
+            method: "POST",
+            body: formData,
+          });
+          if (!r) return;
+          const d = await r.json();
+          if (r.ok && d.success) {
+            toast("上传成功", "success");
+            uploadModal.hide();
+            loadFilters();
+            loadItems();
+          } else {
+            toast(d.detail || "上传失败", "error");
+          }
+        } catch (err) {
+          toast("上传出错: " + err, "error");
+        } finally {
+          submitBtn.disabled = false;
+          submitBtn.textContent = "开始上传";
+        }
+      });
+
+      // Initial load
+      loadFilters();
+      loadItems();
     </script>
   </body>
 </html>
