@@ -377,10 +377,58 @@
       }
 
       function mediaKindLabel(item) {
-        const payload = parsePromptPayload(item);
-        if (payload && (payload.workflow_kind === "chat" || payload.workflow_kind === "text" || payload.messages)) {
+        const code = String(item?.task_type_code || "").toLowerCase();
+        const payload = parsePromptPayload(item) || {};
+
+        let resultObj = null;
+        const rj = item?.result_json;
+        if (rj) {
+          try {
+            resultObj = typeof rj === "object" ? rj : JSON.parse(rj);
+          } catch (_) {}
+        }
+
+        // 1. 对话 (Chat)
+        if (
+          code === "gpt_chat" ||
+          payload.workflow_kind === "chat" ||
+          payload.workflow_kind === "text" ||
+          payload.messages ||
+          resultObj?.workflow_kind === "chat" ||
+          resultObj?.type === "gpt_workflow_chat"
+        ) {
           return "对话";
         }
+
+        // 2. 图片 (Image)
+        const modelStr = String(payload.model || payload.image_model_name || "").toLowerCase();
+        if (
+          item?.image_path ||
+          payload.workflow_kind === "image" ||
+          resultObj?.workflow_kind === "image" ||
+          resultObj?.type === "gpt_workflow_image" ||
+          modelStr.includes("gpt-image") ||
+          modelStr.includes("dall-e") ||
+          payload.resolution === "1k" ||
+          payload.resolution === "2k" ||
+          payload.resolution === "4k" ||
+          payload.size_tier ||
+          Number(payload.duration) === 1 ||
+          Number(payload.n_frames) === 1
+        ) {
+          return "图片";
+        }
+
+        // 3. 视频 (Video)
+        if (
+          payload.workflow_kind === "video" ||
+          code.includes("sora") ||
+          code.includes("veo") ||
+          code.includes("video")
+        ) {
+          return "视频";
+        }
+
         return resolveNFramesFromPromptItem(item) === 1 ? "图片" : "视频";
       }
 
