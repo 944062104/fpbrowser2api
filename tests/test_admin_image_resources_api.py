@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.main import app
 from src.core.database import Database
+from src.core.paths import GENERATED_IMAGES_DIR
 import src.api.admin as admin_module
 
 
@@ -21,12 +22,18 @@ async def test_admin_image_resources_endpoints():
 
     admin_module._ensure_page_access = _mock_page_access
 
-    # Insert test image asset
+    # Create dummy local file on disk
+    GENERATED_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    dummy_file = GENERATED_IMAGES_DIR / "test_del_physical_001.png"
+    dummy_file.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRdummydata")
+    assert dummy_file.exists()
+
+    # Insert test image asset pointing to the dummy file
     asset_id = await db.create_image_asset(
         provider="gpt",
         category="generated",
         name="测试图片001",
-        url="/static/generated_images/test_001.png",
+        url="/static/generated_images/test_del_physical_001.png",
         task_id="task_test_api_001",
         meta_json={"prompt": "A cute cat"},
     )
@@ -52,11 +59,14 @@ async def test_admin_image_resources_endpoints():
         items = list_data.get("items", [])
         assert any(x["id"] == asset_id for x in items)
 
-        # 3. Delete resource
+        # 3. Delete resource (both DB and physical disk file)
         del_resp = await client.delete(f"/api/admin/image-resources/{asset_id}", headers=headers)
         assert del_resp.status_code == 200
-        assert del_resp.json().get("success") is True
-        assert del_resp.json().get("deleted") is True
+        del_data = del_resp.json()
+        assert del_data.get("success") is True
+        assert del_data.get("deleted") is True
+        assert del_data.get("file_deleted") is True
+        assert not dummy_file.exists(), "Local disk file must be physically deleted"
 
 
 @pytest.mark.asyncio
@@ -93,3 +103,9 @@ async def test_admin_image_resources_upload():
         assert res["item"]["provider"] == "custom"
         assert res["item"]["name"] == "手动上传图片"
         assert res["item"]["url"].startswith("/static/generated_images/")
+
+        # Clean up uploaded file physically
+        uploaded_id = res["item"]["id"]
+        del_r = await client.delete(f"/api/admin/image-resources/{uploaded_id}", headers=headers)
+        assert del_r.status_code == 200
+        assert del_r.json().get("file_deleted") is True

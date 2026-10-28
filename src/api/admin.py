@@ -7080,8 +7080,31 @@ async def delete_image_resource(id: int, token: str = Depends(verify_admin_token
     await _ensure_page_access(token, "image_resources")
     if not db:
         raise HTTPException(status_code=500, detail="db not initialized")
+
+    # 1. 查找资产记录以获取本地文件路径
+    asset = await db.get_image_asset_by_id(id)
+
+    # 2. 从数据库删除记录
     deleted = await db.delete_image_asset(id)
-    return {"success": True, "id": id, "deleted": deleted}
+
+    # 3. 物理删除磁盘文件（若存在于本地 generated_images 目录）
+    file_deleted = False
+    if asset and asset.get("url"):
+        url = str(asset["url"])
+        if url.startswith("/static/generated_images/"):
+            filename = url.replace("/static/generated_images/", "").strip()
+            filename_clean = Path(filename).name
+            if filename_clean:
+                target_path = GENERATED_IMAGES_DIR / filename_clean
+                try:
+                    if target_path.is_file():
+                        target_path.unlink(missing_ok=True)
+                        file_deleted = True
+                        logger.info("物理删除图片文件成功: %s", target_path)
+                except Exception as file_err:
+                    logger.warning("物理删除图片文件失败 %s: %s", target_path, file_err)
+
+    return {"success": True, "id": id, "deleted": deleted, "file_deleted": file_deleted}
 
 
 @router.post("/api/admin/image-resources/upload")

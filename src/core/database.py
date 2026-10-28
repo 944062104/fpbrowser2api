@@ -6840,6 +6840,23 @@ class Database:
                 "categories": categories,
             }
 
+    async def get_image_asset_by_id(self, asset_id: int) -> Optional[Dict[str, Any]]:
+        """根据 ID 查询单条图片资产。"""
+        async with self._read_conn() as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM image_assets WHERE id = ? LIMIT 1", (int(asset_id),))
+            row = await cur.fetchone()
+            await cur.close()
+            if not row:
+                return None
+            res = dict(row)
+            if res.get("meta_json"):
+                try:
+                    res["meta_json"] = json.loads(res["meta_json"])
+                except Exception:
+                    pass
+            return res
+
     async def delete_image_asset(self, asset_id: int) -> bool:
         """删除一条图片资产记录。"""
         async with self._write_conn() as db:
