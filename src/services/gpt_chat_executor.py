@@ -67,6 +67,8 @@ async def gpt_chat_workflow(
     access_expires: Optional[str] = None,
     task_id: Optional[str] = None,
     window_pk: Optional[int] = None,
+    headless: Optional[bool] = False,
+    pure_mode: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """专属 ChatGPT 对话工作流执行器。"""
     prompt = _prepare_chat_prompt(payload)
@@ -81,6 +83,9 @@ async def gpt_chat_workflow(
         space_id=space_id,
         window_key=window_key,
     )
+    sess.browser_headless = bool(headless)
+    if pure_mode is not None:
+        sess.browser_pure_mode = bool(pure_mode)
 
     await progress_cb(2, {"stage": "init", "workflow_kind": "chat", "prompt": _safe_trim(prompt, 100)})
 
@@ -91,6 +96,8 @@ async def gpt_chat_workflow(
         space_id=space_id,
         window_key=window_key,
         wait_seconds=float(payload.get("connect_timeout") or 10.0),
+        headless=headless,
+        pure_mode=pure_mode,
     )
 
     ext_payload = {

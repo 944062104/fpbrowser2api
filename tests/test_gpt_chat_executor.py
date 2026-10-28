@@ -54,3 +54,12 @@ async def test_gpt_chat_workflow_validation():
             space_id="default",
             window_key="3",
         )
+
+
+def test_gpt_chat_workflow_signature():
+    """验证 gpt_chat_workflow 支持 headless 和 pure_mode 参数"""
+    import inspect
+    from src.services.gpt_chat_executor import gpt_chat_workflow
+    sig = inspect.signature(gpt_chat_workflow)
+    assert "headless" in sig.parameters
+    assert "pure_mode" in sig.parameters

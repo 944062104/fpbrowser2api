@@ -2065,6 +2065,8 @@ class TaskService:
                             default_target_url=picked.default_target_url,
                             task_id=task_id,
                             window_pk=picked.window_pk,
+                            headless=picked.headless,
+                            pure_mode=picked.pure_mode,
                         ),
                         timeout=float(picked.timeout_seconds),
                     )
