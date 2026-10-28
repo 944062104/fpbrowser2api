@@ -536,6 +536,30 @@ class Database:
                 """
             )
 
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS image_assets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT,
+                    provider TEXT NOT NULL DEFAULT 'unknown',
+                    category TEXT NOT NULL DEFAULT 'generated',
+                    name TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    width INTEGER DEFAULT 0,
+                    height INTEGER DEFAULT 0,
+                    size_bytes INTEGER DEFAULT 0,
+                    mime TEXT,
+                    meta_json TEXT,
+                    created_at TIMESTAMP DEFAULT (datetime('now','localtime')),
+                    updated_at TIMESTAMP DEFAULT (datetime('now','localtime'))
+                )
+                """
+            )
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_image_assets_provider ON image_assets(provider)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_image_assets_category ON image_assets(category)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_image_assets_task_id ON image_assets(task_id)")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_image_assets_created_id ON image_assets(created_at DESC, id DESC)")
+
             await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_task_id ON tasks(task_id)")
             # 兼容旧库：可能还未 ADD COLUMN generation_id，此处索引创建允许失败（迁移阶段会再补一次）
             try:
@@ -6678,3 +6702,137 @@ class Database:
             row = await cur.fetchone()
             await cur.close()
             return dict(row) if row else {}
+
+    # -------------------- image_assets (Universal Media Assets) --------------------
+    async def create_image_asset(
+        self,
+        *,
+        provider: str = "unknown",
+        category: str = "generated",
+        name: str,
+        url: str,
+        task_id: Optional[str] = None,
+        width: int = 0,
+        height: int = 0,
+        size_bytes: int = 0,
+        mime: Optional[str] = None,
+        meta_json: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """创建一条通用图片资产记录。"""
+        meta_str = json.dumps(meta_json, ensure_ascii=False) if meta_json is not None else None
+        async with self._write_conn() as db:
+            cur = await db.execute(
+                """
+                INSERT INTO image_assets (
+                    task_id, provider, category, name, url, width, height, size_bytes, mime, meta_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (task_id, provider, category, name, url, width, height, size_bytes, mime, meta_str),
+            )
+            await db.commit()
+            return int(cur.lastrowid or 0)
+
+    async def list_image_assets(
+        self,
+        *,
+        provider: Optional[str] = None,
+        category: Optional[str] = None,
+        q: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Tuple[int, List[Dict[str, Any]]]:
+        """分页获取通用图片资产列表。"""
+        where_clauses: List[str] = []
+        params: List[Any] = []
+
+        if provider and provider.strip() and provider.strip() != "all":
+            where_clauses.append("provider = ?")
+            params.append(provider.strip())
+
+        if category and category.strip() and category.strip() != "all":
+            where_clauses.append("category = ?")
+            params.append(category.strip())
+
+        if q and q.strip():
+            kw = f"%{q.strip()}%"
+            where_clauses.append("(name LIKE ? OR task_id LIKE ? OR meta_json LIKE ?)")
+            params.extend([kw, kw, kw])
+
+        where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+        async with self._read_conn() as db:
+            db.row_factory = aiosqlite.Row
+            count_cur = await db.execute(f"SELECT COUNT(*) FROM image_assets {where_sql}", tuple(params))
+            total = int((await count_cur.fetchone())[0] or 0)
+            await count_cur.close()
+
+            query_sql = f"""
+                SELECT id, task_id, provider, category, name, url, width, height, size_bytes, mime, meta_json, created_at, updated_at
+                FROM image_assets
+                {where_sql}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ? OFFSET ?
+            """
+            list_params = list(params) + [max(1, min(200, int(limit))), max(0, int(offset))]
+            cur = await db.execute(query_sql, tuple(list_params))
+            rows = await cur.fetchall()
+            await cur.close()
+
+            items: List[Dict[str, Any]] = []
+            for r in rows:
+                item = dict(r)
+                if item.get("meta_json"):
+                    try:
+                        item["meta_json"] = json.loads(item["meta_json"])
+                    except Exception:
+                        pass
+                items.append(item)
+            return total, items
+
+    async def get_image_asset_filters(self) -> Dict[str, Any]:
+        """获取当前已有图片资产的动态聚合过滤器（包含平台列表及各自分类统计）。"""
+        async with self._read_conn() as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                """
+                SELECT provider, COUNT(*) as cnt
+                FROM image_assets
+                GROUP BY provider
+                ORDER BY cnt DESC
+                """
+            )
+            p_rows = await cur.fetchall()
+            await cur.close()
+
+            cur = await db.execute(
+                """
+                SELECT category, COUNT(*) as cnt
+                FROM image_assets
+                GROUP BY category
+                ORDER BY cnt DESC
+                """
+            )
+            c_rows = await cur.fetchall()
+            await cur.close()
+
+            cur = await db.execute("SELECT COUNT(*) FROM image_assets")
+            total = int((await cur.fetchone())[0] or 0)
+            await cur.close()
+
+            providers = [{"name": r["provider"], "count": int(r["cnt"])} for r in p_rows if r["provider"]]
+            categories = [{"name": r["category"], "count": int(r["cnt"])} for r in c_rows if r["category"]]
+
+            return {
+                "total": total,
+                "providers": providers,
+                "categories": categories,
+            }
+
+    async def delete_image_asset(self, asset_id: int) -> bool:
+        """删除一条图片资产记录。"""
+        async with self._write_conn() as db:
+            cur = await db.execute("DELETE FROM image_assets WHERE id = ?", (int(asset_id),))
+            await db.commit()
+            return (cur.rowcount or 0) > 0
+
