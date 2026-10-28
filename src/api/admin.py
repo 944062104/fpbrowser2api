@@ -17,14 +17,14 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Header, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Header, Query, UploadFile
 from pydantic import BaseModel, Field, field_validator
 
 from ..core.auth import AuthManager
 from ..core.config import config as app_config
 from ..core.database import Database
 from ..core.logger import logger, setup_logging
-from ..core.paths import APP_ROOT, PID_FILE
+from ..core.paths import APP_ROOT, GENERATED_IMAGES_DIR, PID_FILE
 from ..core.public_api_limits import normalize_public_create_task_max_inflight
 from ..services.fp_browser_client import FPBrowserClient
 
@@ -7041,8 +7041,21 @@ async def get_watermark_billing_details(
 
 
 # -------------------- logs --------------------
+# -------------------- image-resources (Universal Asset Center) --------------------
+@router.get("/api/admin/image-resources/filters")
+async def get_image_resource_filters(token: str = Depends(verify_admin_token)):
+    await _ensure_page_access(token, "image_resources")
+    if not db:
+        raise HTTPException(status_code=500, detail="db not initialized")
+    filters = await db.get_image_asset_filters()
+    return {"success": True, **filters}
+
+
 @router.get("/api/admin/image-resources")
 async def list_image_resources(
+    provider: Optional[str] = Query(None, description="Filter by provider"),
+    category: Optional[str] = Query(None, description="Filter by category"),
+    q: Optional[str] = Query(None, description="Search keyword in name or prompt"),
     limit: int = 50,
     offset: int = 0,
     token: str = Depends(verify_admin_token),
@@ -7052,37 +7065,73 @@ async def list_image_resources(
         raise HTTPException(status_code=500, detail="db not initialized")
     lim = max(1, min(200, int(limit or 50)))
     off = max(0, int(offset or 0))
-    async with db._read_conn() as conn:
-        conn.row_factory = __import__("aiosqlite").Row
-        await conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS dreamina_subject_images (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                uid TEXT,
-                subject_id TEXT,
-                data_id TEXT,
-                name TEXT NOT NULL,
-                image_uri TEXT NOT NULL,
-                width INTEGER DEFAULT 0,
-                height INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT (datetime('now','localtime')),
-                updated_at TIMESTAMP DEFAULT (datetime('now','localtime'))
-            )
-            """
-        )
-        cur = await conn.execute("SELECT COUNT(*) FROM dreamina_subject_images")
-        total = int((await cur.fetchone())[0] or 0)
-        cur = await conn.execute(
-            """
-            SELECT id, uid, subject_id, data_id, name, image_uri, width, height, created_at, updated_at
-            FROM dreamina_subject_images
-            ORDER BY id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (lim, off),
-        )
-        rows = await cur.fetchall()
-    return {"success": True, "total": total, "limit": lim, "offset": off, "items": [dict(r) for r in rows]}
+    total, items = await db.list_image_assets(
+        provider=provider,
+        category=category,
+        q=q,
+        limit=lim,
+        offset=off,
+    )
+    return {"success": True, "total": total, "limit": lim, "offset": off, "items": items}
+
+
+@router.delete("/api/admin/image-resources/{id}")
+async def delete_image_resource(id: int, token: str = Depends(verify_admin_token)):
+    await _ensure_page_access(token, "image_resources")
+    if not db:
+        raise HTTPException(status_code=500, detail="db not initialized")
+    deleted = await db.delete_image_asset(id)
+    return {"success": True, "id": id, "deleted": deleted}
+
+
+@router.post("/api/admin/image-resources/upload")
+async def upload_admin_image_resource(
+    file: UploadFile = File(...),
+    provider: str = Form("custom"),
+    category: str = Form("upload"),
+    name: Optional[str] = Form(None),
+    token: str = Depends(verify_admin_token),
+):
+    await _ensure_page_access(token, "image_resources")
+    if not db:
+        raise HTTPException(status_code=500, detail="db not initialized")
+
+    contents = await file.read()
+    if len(contents) > 30 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="文件大小超过 30MB 限制")
+
+    GENERATED_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"):
+        ext = ".png"
+
+    filename = f"upload_{int(datetime.now().timestamp())}_{uuid.uuid4().hex[:6]}{ext}"
+    out_path = GENERATED_IMAGES_DIR / filename
+    await asyncio.to_thread(out_path.write_bytes, contents)
+
+    local_url = f"/static/generated_images/{filename}"
+    asset_name = (name or "").strip() or file.filename or filename
+
+    asset_id = await db.create_image_asset(
+        provider=provider.strip() or "custom",
+        category=category.strip() or "upload",
+        name=asset_name,
+        url=local_url,
+        size_bytes=len(contents),
+        mime=file.content_type or "image/png",
+        meta_json={"source": "admin_upload", "original_filename": file.filename},
+    )
+    return {
+        "success": True,
+        "item": {
+            "id": asset_id,
+            "provider": provider,
+            "category": category,
+            "name": asset_name,
+            "url": local_url,
+            "size_bytes": len(contents),
+        },
+    }
 
 
 @router.get("/api/admin/logs")

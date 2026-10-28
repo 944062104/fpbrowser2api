@@ -6831,8 +6831,8 @@ class Database:
             total = int((await cur.fetchone())[0] or 0)
             await cur.close()
 
-            providers = [{"name": r["provider"], "count": int(r["cnt"])} for r in p_rows if r["provider"]]
-            categories = [{"name": r["category"], "count": int(r["cnt"])} for r in c_rows if r["category"]]
+            providers = [{"name": r["provider"], "provider": r["provider"], "count": int(r["cnt"])} for r in p_rows if r["provider"]]
+            categories = [{"name": r["category"], "category": r["category"], "count": int(r["cnt"])} for r in c_rows if r["category"]]
 
             return {
                 "total": total,
