@@ -130,6 +130,7 @@
               </div>
               <div class="mb-3">
                 <div class="text-muted small">结果</div>
+                <div id="resultImageGallery" class="d-flex flex-wrap gap-2 mb-2 d-none"></div>
                 <pre class="bg-light border rounded p-2 small" id="result" style="min-height: 160px; white-space: pre-wrap;"></pre>
               </div>
             </div>
@@ -291,6 +292,45 @@
         document.getElementById("status").textContent = d?.status ?? "-";
         setProgress(d?.progress || 0);
         document.getElementById("result").textContent = d ? JSON.stringify(d, null, 2) : "";
+
+        const galleryEl = document.getElementById("resultImageGallery");
+        if (galleryEl) {
+          const urls = [];
+          if (d?.image_path) urls.push(d.image_path);
+          const res = d?.result;
+          if (res && typeof res === "object") {
+            if (res.local_image_url) urls.push(res.local_image_url);
+            if (res.local_url) urls.push(res.local_url);
+            if (res.image_url) urls.push(res.image_url);
+            if (Array.isArray(res.urls)) urls.push(...res.urls);
+            if (Array.isArray(res.result_urls)) urls.push(...res.result_urls);
+            if (Array.isArray(res.assets)) {
+              for (const a of res.assets) if (a && a.url) urls.push(a.url);
+            }
+          }
+          const uniqUrls = Array.from(new Set(urls.filter(Boolean)));
+          if (uniqUrls.length > 0) {
+            galleryEl.innerHTML = uniqUrls.map(u => {
+              const isEstuary = u.includes("chatgpt.com/backend-api/estuary");
+              return `
+                <div class="card p-2 shadow-sm text-center" style="max-width: 320px;">
+                  <a href="${escapeHtml(u)}" target="_blank" rel="noreferrer">
+                    <img src="${escapeHtml(u)}" class="img-fluid rounded border mb-2" style="max-height: 240px; object-fit: contain;" alt="生图结果" onerror="this.parentElement.innerHTML='<div class=\'alert alert-warning py-1 small mb-1\'>图片无法直接加载 (受防盗链保护)</div>'"/>
+                  </a>
+                  <div class="d-flex justify-content-between align-items-center gap-1">
+                    <a href="${escapeHtml(u)}" target="_blank" class="btn btn-outline-primary btn-sm btn-compact flex-grow-1">新窗口大图</a>
+                    <a href="${escapeHtml(u)}" download class="btn btn-outline-secondary btn-sm btn-compact">下载</a>
+                  </div>
+                  ${isEstuary ? '<div class="text-warning small2 mt-1">ChatGPT外链，如遇403请右键保存</div>' : ''}
+                </div>
+              `;
+            }).join("");
+            galleryEl.classList.remove("d-none");
+          } else {
+            galleryEl.innerHTML = "";
+            galleryEl.classList.add("d-none");
+          }
+        }
       }
 
       async function fetchAndRenderTask(taskId, { silent = true } = {}) {
