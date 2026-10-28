@@ -302,27 +302,33 @@ def _gpt_extension_r2_upload_config(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {}
 
     r2_cfg = r2_config_from_setting_section((app_config.get_raw_config() or {}).get("r2"))
-    if not r2_cfg.enabled:
-        return {}
-
     access_key_id = (r2_cfg.access_key_id or os.environ.get("R2_ACCESS_KEY_ID") or "").strip()
     access_key_secret = (r2_cfg.access_key_secret or os.environ.get("R2_ACCESS_KEY_SECRET") or "").strip()
-    if not (r2_cfg.endpoint and r2_cfg.region and r2_cfg.bucket and access_key_id and access_key_secret):
-        # 配置不完整时不下发，保持旧逻辑；真正上传错误由插件侧抛出小错误，不返回大图。
-        return {}
+    if r2_cfg.enabled and r2_cfg.endpoint and r2_cfg.region and r2_cfg.bucket and access_key_id and access_key_secret:
+        return {
+            "enabled": True,
+            "provider": "cloudflare_r2",
+            "endpoint": r2_cfg.endpoint,
+            "region": r2_cfg.region,
+            "bucket": r2_cfg.bucket,
+            "public_base_url": r2_cfg.public_base_url,
+            "access_key_id": access_key_id,
+            "access_key_secret": access_key_secret,
+            # 插件会在该前缀后追加时间戳、随机串和序号；不要把密钥写入插件 storage。
+            "object_key_prefix": f"gpt_workflow/image/gpt-image-2/{resolution}",
+            "required": True,
+        }
 
+    # 未配置 Cloudflare R2 时，自动降级为 local_backend（将图片转存至本地，避免外链 403）
+    raw_cfg = app_config.get_raw_config() or {}
+    ext_base_url = str(raw_cfg.get("extension_executor", {}).get("base_url", "") or "127.0.0.1:8000").strip()
     return {
         "enabled": True,
-        "provider": "cloudflare_r2",
-        "endpoint": r2_cfg.endpoint,
-        "region": r2_cfg.region,
-        "bucket": r2_cfg.bucket,
-        "public_base_url": r2_cfg.public_base_url,
-        "access_key_id": access_key_id,
-        "access_key_secret": access_key_secret,
-        # 插件会在该前缀后追加时间戳、随机串和序号；不要把密钥写入插件 storage。
+        "provider": "local_backend",
+        "endpoint": f"http://{ext_base_url}/api/internal/assets/upload",
+        "public_base_url": f"http://{ext_base_url}/static/generated_images",
         "object_key_prefix": f"gpt_workflow/image/gpt-image-2/{resolution}",
-        "required": True,
+        "required": False,
     }
 
 

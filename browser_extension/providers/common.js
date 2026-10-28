@@ -94,9 +94,10 @@ function normalizeR2UploadConfig(raw) {
   const timeoutMs = Number(cfg.timeout_ms || cfg.timeoutMs || cfg.upload_timeout_ms || cfg.uploadTimeoutMs || 60000);
   const attempts = Number(cfg.attempts || cfg.upload_attempts || cfg.uploadAttempts || 3);
   const provider = String(cfg.provider || "cloudflare_r2").trim().toLowerCase();
+  const isLocal = provider === "local_backend" || provider === "local";
   return {
-    enabled: cfg.enabled !== false && (provider === "cloudflare_r2" || provider === "r2"),
-    provider: "cloudflare_r2",
+    enabled: cfg.enabled !== false && (isLocal || provider === "cloudflare_r2" || provider === "r2"),
+    provider: isLocal ? "local_backend" : "cloudflare_r2",
     endpoint: String(cfg.endpoint || "").trim(),
     region: String(cfg.region || "auto").trim() || "auto",
     bucket: String(cfg.bucket || "").trim(),
@@ -313,6 +314,52 @@ export async function uploadDataUrlToR2(rawConfig, dataUrl, options = {}) {
   return await uploadBlobToR2(rawConfig, blob, { ...options, contentType });
 }
 
+export async function uploadDataUrlToLocal(cfg, dataUrl, options = {}) {
+  const s = String(dataUrl || "");
+  if (!/^data:(image|video)\//i.test(s)) throw new Error("Local upload only accepts image/video data URL");
+  const endpoint = String(cfg.endpoint || "").trim() || "http://127.0.0.1:8000/api/internal/assets/upload";
+  const startedAt = Date.now();
+  const taskId = String(options.taskId || options.task_id || "").trim();
+  const prefix = String(options.objectKeyPrefix || cfg.objectKeyPrefix || "gpt_workflow/image").trim();
+  const timeoutMs = Math.max(5000, Number(options.timeoutMs || options.timeout_ms || cfg.timeoutMs || 60000) || 60000);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    try { controller.abort(); } catch (_) {}
+  }, timeoutMs);
+
+  try {
+    const resp = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        data_url: s,
+        task_id: taskId || null,
+        prefix: prefix
+      }),
+      signal: controller.signal
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => "");
+      throw new Error(`Local upload HTTP ${resp.status}: ${String(errText).slice(0, 300)}`);
+    }
+    const result = await resp.json();
+    const localUrl = String(result.url || "").trim();
+    if (!localUrl) throw new Error("Local upload returned empty url");
+    return {
+      url: localUrl,
+      upload_url: endpoint,
+      object_key: result.filename || "",
+      content_type: result.mime || dataUrlMime(s),
+      size: result.size || 0,
+      provider: "local_backend",
+      duration_ms: Date.now() - startedAt
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function uploadDataUrlListToR2(values, rawConfig, options = {}) {
   const cfg = normalizeR2UploadConfig(rawConfig);
   const input = Array.isArray(values) ? values : [];
@@ -342,11 +389,17 @@ export async function uploadDataUrlListToR2(values, rawConfig, options = {}) {
         });
       } catch (_) {}
     }
-    const uploaded = await uploadDataUrlToR2(cfg, value, {
-      ...options,
-      index: uploadIndex,
-      contentType: dataUrlMime(value)
-    });
+    const uploaded = cfg.provider === "local_backend"
+      ? await uploadDataUrlToLocal(cfg, value, {
+          ...options,
+          index: uploadIndex,
+          contentType: dataUrlMime(value)
+        })
+      : await uploadDataUrlToR2(cfg, value, {
+          ...options,
+          index: uploadIndex,
+          contentType: dataUrlMime(value)
+        });
     if (options.runtime && typeof options.runtime.progress === "function") {
       try {
         await options.runtime.progress(Math.min(99, (options.progress || 92) + 1), {

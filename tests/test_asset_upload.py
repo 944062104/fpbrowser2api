@@ -31,3 +31,13 @@ async def test_internal_asset_upload_and_serve():
         assert get_resp.status_code == 200
         assert "image/png" in get_resp.headers.get("content-type", "")
         assert len(get_resp.content) > 0
+
+
+def test_r2_config_fallback_to_local():
+    from src.services.gpt_task_executor import _gpt_extension_r2_upload_config
+    cfg = _gpt_extension_r2_upload_config({"gpt_image2_model": "gpt-image2-1k"})
+    assert cfg["enabled"] is True
+    assert cfg["provider"] in ("cloudflare_r2", "local_backend")
+    if cfg["provider"] == "local_backend":
+        assert "/api/internal/assets/upload" in cfg["endpoint"]
+        assert "/static/generated_images" in cfg["public_base_url"]
