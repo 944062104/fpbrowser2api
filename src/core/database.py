@@ -6721,6 +6721,17 @@ class Database:
         """创建一条通用图片资产记录。"""
         meta_str = json.dumps(meta_json, ensure_ascii=False) if meta_json is not None else None
         async with self._write_conn() as db:
+            cur = await db.execute("SELECT id FROM image_assets WHERE url = ? LIMIT 1", (url,))
+            existing = await cur.fetchone()
+            if existing:
+                if task_id:
+                    await db.execute(
+                        "UPDATE image_assets SET task_id = COALESCE(task_id, ?), updated_at = datetime('now', 'localtime') WHERE id = ?",
+                        (task_id, existing[0]),
+                    )
+                    await db.commit()
+                return int(existing[0])
+
             cur = await db.execute(
                 """
                 INSERT INTO image_assets (

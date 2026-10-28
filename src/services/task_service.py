@@ -189,6 +189,7 @@ from .gpt_task_executor import (
     DEFAULT_GPT_TARGET,
     _gpt_payload_image_model_2k_4k,
 )
+from .gpt_chat_executor import gpt_chat_workflow
 
 
 @dataclass
@@ -257,7 +258,7 @@ def _remaining_quota_exclusive_floor_for_pick(
     if code == "dreamina_workflow":
         credit_threthold = _DREAMINA_MIN_CREDIT - _DREAMINA_GIFT_CREDIT;
         return _DREAMINA_MIN_CREDIT,credit_threthold, plan_type
-    if code == "gpt_workflow":
+    if code in ("gpt_workflow", "gpt_chat"):
         if _gpt_payload_image_model_2k_4k(payload or {}):
             return 1, 0, 1
         return 1, 0, 0
@@ -784,7 +785,7 @@ class TaskService:
                     except Exception:
                         pass
                     return True
-                elif handler == "gpt_workflow":
+                elif handler in ("gpt_workflow", "gpt_chat"):
                     from .gpt_task_executor import DEFAULT_GPT_TARGET, gpt_fetch_access_token_in_window  # type: ignore
 
                     tu = target_url or DEFAULT_GPT_TARGET
@@ -1383,7 +1384,7 @@ class TaskService:
 
         if self._prompt_length_units(s) <= total_max:
             return s
-        raise RuntimeError(f"参数长度超过{total_max}（中文按字、英文按词统计）")
+        return self._truncate_prompt_text(s, total_max, label="payload")
 
     async def submit_task(
         self,
@@ -1449,7 +1450,10 @@ class TaskService:
             if not picked:
                 picked = await self._pick_window(task_type_code, payload=payload)
         if not picked:
-            if mapping_id is not None or window_pk is not None:
+            if window_pk is not None:
+                # 优化：指定窗口繁忙时不要直接抛异常崩溃，而是压入等待队列排队等待该窗口
+                return await self._enqueue_task(task_type_code, payload, required_window_pk=int(window_pk))
+            if mapping_id is not None:
                 raise RuntimeError("指定窗口不可用：请确认该窗口已绑定该任务类型、未删除、已启用")
             return await self._enqueue_task(task_type_code, payload)
 
@@ -2044,6 +2048,26 @@ class TaskService:
                         ),
                         timeout=float(picked.timeout_seconds),
                     )
+                elif picked.create_task_handler == "gpt_chat":
+                    gpt_payload = dict(payload or {})
+                    gpt_payload["task_id"] = task_id
+                    result = await asyncio.wait_for(
+                        gpt_chat_workflow(
+                            gpt_payload,
+                            progress_cb,
+                            browser_vendor=picked.browser_vendor,
+                            browser_base_url=picked.browser_base_url,
+                            browser_access_key=picked.browser_access_key,
+                            space_id=picked.space_id,
+                            window_key=picked.window_key,
+                            access_token=picked.sora_access_token,
+                            access_expires=picked.sora_access_expires,
+                            default_target_url=picked.default_target_url,
+                            task_id=task_id,
+                            window_pk=picked.window_pk,
+                        ),
+                        timeout=float(picked.timeout_seconds),
+                    )
                 elif picked.create_task_handler == "sora_wm_remove":
                     result = await asyncio.wait_for(
                         sora_wm_remove(
@@ -2098,7 +2122,7 @@ class TaskService:
                         force_refresh_token=False,
                     )
                     self._veo_keepalive_refresher.wake_up()
-                elif picked.create_task_handler == "gpt_workflow":
+                elif picked.create_task_handler in ("gpt_workflow", "gpt_chat"):
                     await refresh_gpt_balance_via_extension(
                         db=self.db,
                         picked=picked,
@@ -2149,6 +2173,10 @@ class TaskService:
                 #await self.db.consume_mapping_quota(picked.mapping_id, amount=1)
                 await self.db.mark_mapping_success(picked.mapping_id)
                 logger.info("task completed: %s", task_id)
+                try:
+                    await self._maybe_register_task_image_assets(task_id, picked, result, payload)
+                except Exception as asset_reg_err:
+                    logger.debug("auto-register task image assets error: %s", asset_reg_err)
             except Exception as e:
                 if picked.create_task_handler == "veo_workflow" and not is_veo_image_task:
                     await refresh_veo_balance_via_extension(
@@ -2159,7 +2187,7 @@ class TaskService:
                         auto_triger_connection=False,
                     )
                     self._veo_keepalive_refresher.wake_up()
-                elif picked.create_task_handler == "gpt_workflow":
+                elif picked.create_task_handler in ("gpt_workflow", "gpt_chat"):
                     await refresh_gpt_balance_via_extension(
                         db=self.db,
                         picked=picked,
@@ -2473,3 +2501,76 @@ class TaskService:
                     self._task_payloads.pop(task_id, None)
                     logger.exception("task retry error: %s err=%s", task_id, retry_err)
 
+
+    async def _maybe_register_task_image_assets(
+        self,
+        task_id: str,
+        picked: Any,
+        result: Any,
+        payload: Any = None,
+    ) -> None:
+        """任务成功完成后，自动将生成的图片登记到通用资产库 image_assets。"""
+        if not isinstance(result, dict) or not self.db:
+            return
+
+        urls: list[str] = []
+        for key in ("urls", "local_image_url", "local_url", "image_url", "url"):
+            val = result.get(key)
+            if isinstance(val, list):
+                for item in val:
+                    if isinstance(item, str) and item.strip():
+                        urls.append(item.strip())
+                    elif isinstance(item, dict) and item.get("url"):
+                        urls.append(str(item["url"]).strip())
+            elif isinstance(val, str) and val.strip():
+                urls.append(val.strip())
+
+        try:
+            task_row = await self.db.get_task(task_id)
+            if task_row and task_row.get("image_path"):
+                urls.append(task_row["image_path"].strip())
+        except Exception:
+            pass
+
+        dedup_urls: list[str] = []
+        for u in urls:
+            if u not in dedup_urls and (
+                u.startswith("/static/generated_images/")
+                or any(ext in u.lower() for ext in (".png", ".jpg", ".jpeg", ".webp", ".gif"))
+                or "image" in u.lower()
+            ):
+                dedup_urls.append(u)
+
+        if not dedup_urls:
+            return
+
+        handler = getattr(picked, "create_task_handler", "") or ""
+        provider = "unknown"
+        if "gpt" in handler:
+            provider = "gpt"
+        elif "dreamina" in handler:
+            provider = "dreamina"
+        elif "veo" in handler:
+            provider = "veo"
+        elif handler:
+            provider = handler.split("_")[0]
+
+        prompt = ""
+        if isinstance(payload, dict):
+            prompt = payload.get("prompt") or payload.get("text") or ""
+
+        for idx, u in enumerate(dedup_urls):
+            name = f"{provider.upper()}生图_{task_id[:8]}"
+            if len(dedup_urls) > 1:
+                name += f"_{idx + 1}"
+            try:
+                await self.db.create_image_asset(
+                    provider=provider,
+                    category="generated",
+                    name=name,
+                    url=u,
+                    task_id=task_id,
+                    meta_json={"prompt": prompt, "handler": handler},
+                )
+            except Exception as e:
+                logger.debug("register task image asset failed for %s url %s: %s", task_id, u, e)

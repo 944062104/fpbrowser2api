@@ -1308,6 +1308,48 @@ async def upload_internal_asset(body: InternalAssetUploadRequest = Body(...)):
 
     local_url = f"/static/generated_images/{filename}"
 
+    # Determine provider dynamically from prefix or default to gpt
+    provider = "unknown"
+    prefix_lower = (body.prefix or "").lower()
+    if "dreamina" in prefix_lower:
+        provider = "dreamina"
+    elif "veo" in prefix_lower:
+        provider = "veo"
+    elif "gpt" in prefix_lower:
+        provider = "gpt"
+    elif prefix_lower:
+        provider = prefix_lower.split("/")[0].split("_")[0]
+    else:
+        provider = "gpt"
+
+    active_db = db
+    if active_db is None:
+        try:
+            from src.core.database import Database
+            active_db = Database()
+        except Exception:
+            pass
+
+    if active_db is not None:
+        try:
+            asset_name = f"{provider.upper()}生图_{task_id_clean or filename[:12]}"
+            await active_db.create_image_asset(
+                provider=provider,
+                category="generated",
+                name=asset_name,
+                url=local_url,
+                task_id=task_id_clean or None,
+                size_bytes=len(raw_bytes),
+                mime=mime_type,
+                meta_json={
+                    "source": "internal_asset_upload",
+                    "filename": filename,
+                    "prefix": body.prefix,
+                },
+            )
+        except Exception as e:
+            logger.warning("auto-register image_asset failed: %s", e)
+
     if task_id_clean and db is not None:
         try:
             task_row = await db.get_task(task_id_clean)
