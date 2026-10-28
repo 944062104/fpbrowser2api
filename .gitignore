@@ -58,3 +58,5 @@ __pycache__/
 start_all_services.bat
 make_desktop_shortcuts.py
 /bin/
+/data/generated_images/
+/.superpowers/
