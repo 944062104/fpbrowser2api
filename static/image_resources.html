@@ -9,46 +9,103 @@
     <link href="/assets/admin-theme.css" rel="stylesheet" />
     <style>
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+      
+      /* 画廊卡片样式 */
       .gallery-card {
-        transition: transform 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
-        border-radius: 8px;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        border-radius: 10px;
         overflow: hidden;
+        border: 1px solid rgba(0,0,0,0.08);
       }
       .gallery-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.12) !important;
+        transform: translateY(-3px);
+        box-shadow: 0 0.75rem 1.5rem rgba(0, 0, 0, 0.12) !important;
       }
       .thumb-container {
         position: relative;
         width: 100%;
-        height: 180px;
+        height: 230px;
         background-color: #f8f9fa;
-        background-image: linear-gradient(45deg, #eee 25%, transparent 25%),
-                          linear-gradient(-45deg, #eee 25%, transparent 25%),
-                          linear-gradient(45deg, transparent 75%, #eee 75%),
-                          linear-gradient(-45deg, transparent 75%, #eee 75%);
+        background-image: linear-gradient(45deg, #e9ecef 25%, transparent 25%),
+                          linear-gradient(-45deg, #e9ecef 25%, transparent 25%),
+                          linear-gradient(45deg, transparent 75%, #e9ecef 75%),
+                          linear-gradient(-45deg, transparent 75%, #e9ecef 75%);
         background-size: 16px 16px;
         background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
         display: flex;
         align-items: center;
         justify-content: center;
         overflow: hidden;
-        cursor: pointer;
       }
       .thumb-img {
         max-width: 100%;
         max-height: 100%;
         object-fit: contain;
+        transition: transform 0.25s ease;
       }
+      .gallery-card:hover .thumb-img {
+        transform: scale(1.03);
+      }
+      
+      /* 卡片悬停浮层操作栏 */
+      .card-hover-overlay {
+        position: absolute;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.65);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        opacity: 0;
+        transition: opacity 0.2s ease;
+        z-index: 5;
+        backdrop-filter: blur(2px);
+      }
+      .gallery-card:hover .card-hover-overlay {
+        opacity: 1;
+      }
+      .hover-action-btn {
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.95);
+        color: #1e293b;
+        border: none;
+        transition: transform 0.15s ease, background 0.15s ease, color 0.15s ease;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+        text-decoration: none;
+        cursor: pointer;
+      }
+      .hover-action-btn:hover {
+        transform: scale(1.15);
+        background: #0d6efd;
+        color: #fff;
+      }
+      .hover-action-btn.btn-danger-hover:hover {
+        background: #dc3545;
+        color: #fff;
+      }
+
+      /* 平台彩色角标 */
       .badge-provider {
-        font-size: 0.72rem;
-        text-transform: uppercase;
+        font-size: 0.75rem;
         letter-spacing: 0.5px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        font-weight: 600;
       }
+
+      /* 过滤器胶囊条 */
       .filter-pill {
         cursor: pointer;
         user-select: none;
         transition: all 0.2s ease;
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-size: 0.82rem;
       }
       .filter-pill.active {
         box-shadow: 0 2px 6px rgba(13, 110, 253, 0.35);
@@ -59,10 +116,51 @@
         -webkit-box-orient: vertical;
         overflow: hidden;
       }
+
+      /* 表格视图中的缩略图悬停放大 */
+      .table-thumb {
+        width: 54px;
+        height: 54px;
+        object-fit: contain;
+        background: #f1f5f9;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: transform 0.15s ease;
+      }
+      .table-thumb:hover {
+        transform: scale(1.15);
+        box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+      }
+
+      /* 沉浸式 Lightbox */
+      .lightbox-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(10, 15, 29, 0.92);
+        z-index: 1095;
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        backdrop-filter: blur(5px);
+        padding: 20px;
+      }
+      .lightbox-backdrop.active {
+        display: flex;
+      }
+      .lightbox-img {
+        max-width: 90vw;
+        max-height: 82vh;
+        object-fit: contain;
+        border-radius: 8px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      }
     </style>
   </head>
   <body class="bg-light">
-    <div id="toastContainer" class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index: 1090;"></div>
+    <div id="toastContainer" class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index: 1100;"></div>
+    
+    <!-- 顶部导航栏 -->
     <nav class="navbar navbar-dark bg-dark admin-top-nav">
       <div class="container-fluid">
         <a class="navbar-brand" href="/admin/system">Mirr矩阵</a>
@@ -87,25 +185,41 @@
     </nav>
 
     <div class="container-fluid px-4 py-4">
-      <!-- 顶部控制栏 -->
+      <!-- 顶部控制与视图切换栏 -->
       <div class="card shadow-sm mb-3">
         <div class="card-body py-3">
           <div class="row g-2 align-items-center">
-            <div class="col-12 col-md-4">
+            <div class="col-12 col-md-3">
               <h5 class="mb-0 fw-bold d-flex align-items-center gap-2">
                 <span>🖼️ 全局图片资产中心</span>
                 <span class="badge bg-secondary rounded-pill fs-6 fw-normal" id="totalBadge">0</span>
               </h5>
             </div>
-            <div class="col-12 col-md-5">
+            <div class="col-12 col-md-4">
               <div class="input-group input-group-sm">
                 <input type="text" class="form-control" id="searchInput" placeholder="搜索资产名称、Prompt、Task ID..." />
                 <button class="btn btn-outline-primary" id="btnSearch">搜索</button>
                 <button class="btn btn-outline-secondary" id="btnClearSearch">清空</button>
               </div>
             </div>
-            <div class="col-12 col-md-3 text-md-end">
-              <button class="btn btn-primary btn-sm me-1" id="btnUploadModal">
+            <div class="col-12 col-md-5 text-md-end d-flex align-items-center justify-content-md-end gap-2">
+              <!-- 视图模式切换 -->
+              <div class="btn-group btn-group-sm me-2" role="group" aria-label="视图模式">
+                <button type="button" class="btn btn-outline-primary active" id="btnViewGrid" title="卡片画廊视图">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-grid-fill me-1" viewBox="0 0 16 16">
+                    <path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5v-3zm8 0A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5v-3zm-8 8A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5v-3zm8 0A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5v-3z"/>
+                  </svg>
+                  卡片画廊
+                </button>
+                <button type="button" class="btn btn-outline-primary" id="btnViewTable" title="数据表格视图">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-list-ul me-1" viewBox="0 0 16 16">
+                    <path fill-rule="evenodd" d="M5 11.5a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm-3 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm0 4a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm0 4a1 1 0 1 0 0-2 1 1 0 0 0 0 2z"/>
+                  </svg>
+                  数据表格
+                </button>
+              </div>
+
+              <button class="btn btn-primary btn-sm" id="btnUploadModal">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" class="bi bi-cloud-arrow-up me-1" viewBox="0 0 16 16">
                   <path fill-rule="evenodd" d="M7.646 5.146a.5.5 0 0 1 .708 0l2 2a.5.5 0 0 1-.708.708L8.5 6.707V10.5a.5.5 0 0 1-1 0V6.707L6.354 7.854a.5.5 0 1 1-.708-.708z"/>
                   <path d="M4.406 3.342A5.53 5.53 0 0 1 8 2c2.69 0 4.923 2 5.166 4.579A3.95 3.95 0 0 1 16 9.5a4 4 0 0 1-4 4H4a4 4 0 0 1-3.992-3.83A5.002 5.002 0 0 1 4.06 3.342z"/>
@@ -130,12 +244,39 @@
         </div>
       </div>
 
-      <!-- 图片网格展示区 -->
-      <div class="row g-3" id="galleryGrid">
-        <div class="col-12 text-center text-muted py-5">正在加载资产库...</div>
+      <!-- 视图容器 1: 卡片画廊模式 -->
+      <div id="galleryViewBox">
+        <div class="row g-3" id="galleryGrid">
+          <div class="col-12 text-center text-muted py-5">正在加载资产库...</div>
+        </div>
       </div>
 
-      <!-- 分页栏 -->
+      <!-- 视图容器 2: 数据表格模式 -->
+      <div id="tableViewBox" style="display: none;">
+        <div class="card shadow-sm border-0">
+          <div class="table-responsive">
+            <table class="table table-hover table-striped align-middle mb-0">
+              <thead class="table-light small">
+                <tr>
+                  <th style="width: 70px;">缩略图</th>
+                  <th style="min-width: 220px;">名称 / 提示词</th>
+                  <th style="width: 110px;">平台</th>
+                  <th style="width: 100px;">分类</th>
+                  <th style="width: 130px;">规格 / 体积</th>
+                  <th style="width: 150px;">关联 Task ID</th>
+                  <th style="width: 160px;">创建时间</th>
+                  <th style="width: 170px;" class="text-center">操作</th>
+                </tr>
+              </thead>
+              <tbody id="tableTbody" class="small">
+                <tr><td colspan="8" class="text-center text-muted py-4">正在加载...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 底部统一分页栏 -->
       <div class="card shadow-sm mt-3">
         <div class="card-body py-2 d-flex align-items-center justify-content-between">
           <span class="text-muted small" id="pageInfo">共 0 条</span>
@@ -147,79 +288,94 @@
       </div>
     </div>
 
-    <!-- 图片详情弹窗 -->
-    <div class="modal fade" id="detailModal" tabindex="-1" aria-labelledby="detailModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-lg modal-dialog-centered">
-        <div class="modal-content">
-          <div class="modal-header py-2">
-            <h6 class="modal-title fw-bold" id="detailModalLabel">资产详情</h6>
-            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+    <!-- 沉浸式 Lightbox 大图查看层 -->
+    <div id="lightboxOverlay" class="lightbox-backdrop">
+      <div class="position-absolute top-0 end-0 p-3 d-flex align-items-center gap-2" style="z-index: 10;">
+        <button class="btn btn-outline-light btn-sm rounded-pill px-3" id="lbBtnCopy">📋 复制直链</button>
+        <a class="btn btn-primary btn-sm rounded-pill px-3" id="lbBtnDownload" href="" download>⬇️ 下载原图</a>
+        <button class="btn btn-dark btn-sm rounded-circle p-2" id="lbBtnClose" title="关闭 (Esc)" style="width: 36px; height: 36px; line-height: 1;">✕</button>
+      </div>
+      <img id="lightboxImg" class="lightbox-img" src="" alt="原图预览" />
+      <div class="text-light mt-3 small text-center" id="lightboxTitle"></div>
+    </div>
+
+    <!-- 右侧滑出式参数详情抽屉 (Offcanvas Drawer) -->
+    <div class="offcanvas offcanvas-end" tabindex="-1" id="assetDrawer" aria-labelledby="assetDrawerLabel" style="width: 480px;">
+      <div class="offcanvas-header border-bottom py-3">
+        <h6 class="offcanvas-title fw-bold" id="assetDrawerLabel">资产详情与元数据</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+      </div>
+      <div class="offcanvas-body p-3">
+        <!-- 抽屉顶部小图 -->
+        <div class="text-center bg-dark rounded p-2 mb-3" style="max-height: 220px; overflow: hidden;">
+          <img id="drawerImg" src="" class="img-fluid rounded" style="max-height: 200px; object-fit: contain; cursor: pointer;" title="点击放大查看" />
+        </div>
+
+        <!-- 核心属性列表 -->
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered align-middle small mb-3">
+            <tbody>
+              <tr>
+                <th class="bg-light" style="width: 28%;">ID</th>
+                <td id="drawerId" class="mono"></td>
+              </tr>
+              <tr>
+                <th class="bg-light">名称</th>
+                <td id="drawerName" class="fw-semibold"></td>
+              </tr>
+              <tr>
+                <th class="bg-light">平台 / 分类</th>
+                <td>
+                  <span id="drawerProvider" class="badge bg-primary me-1"></span>
+                  <span id="drawerCategory" class="badge bg-secondary"></span>
+                </td>
+              </tr>
+              <tr>
+                <th class="bg-light">规格</th>
+                <td><span id="drawerDimensions"></span> | <span id="drawerSize"></span></td>
+              </tr>
+              <tr>
+                <th class="bg-light">Task ID</th>
+                <td id="drawerTaskId" class="mono text-break"></td>
+              </tr>
+              <tr>
+                <th class="bg-light">创建时间</th>
+                <td id="drawerCreatedAt" class="mono"></td>
+              </tr>
+              <tr>
+                <th class="bg-light">外链路径</th>
+                <td>
+                  <div class="d-flex align-items-center gap-1">
+                    <span id="drawerUrl" class="mono small text-truncate" style="max-width: 170px;"></span>
+                    <button class="btn btn-outline-secondary btn-xs py-0 px-2" id="drawerBtnCopyUrl">复制</button>
+                    <a id="drawerLink" href="" target="_blank" class="btn btn-outline-primary btn-xs py-0 px-2">打开</a>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <th class="bg-light">Prompt 描述</th>
+                <td>
+                  <div id="drawerPrompt" class="text-break small mb-1" style="max-height: 100px; overflow-y: auto;"></div>
+                  <button class="btn btn-outline-secondary btn-xs py-0 px-2" id="drawerBtnCopyPrompt">复制 Prompt</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 拓展参数 JSON 区域 -->
+        <div id="drawerMetaSection">
+          <div class="d-flex align-items-center justify-content-between mb-1">
+            <span class="small text-muted fw-semibold">拓展参数 (Meta JSON):</span>
+            <button class="btn btn-link btn-xs p-0 text-decoration-none" id="drawerBtnCopyMeta">复制 JSON</button>
           </div>
-          <div class="modal-body p-3">
-            <div class="row g-3">
-              <div class="col-12 col-md-6 text-center bg-dark rounded d-flex align-items-center justify-content-center p-2" style="min-height: 280px; max-height: 480px; overflow: hidden;">
-                <img id="modalPreviewImg" src="" class="img-fluid rounded" style="max-height: 460px; object-fit: contain;" alt="预览" />
-              </div>
-              <div class="col-12 col-md-6">
-                <div class="table-responsive">
-                  <table class="table table-sm table-bordered align-middle small mb-0">
-                    <tbody>
-                      <tr>
-                        <th class="bg-light" style="width: 32%;">ID</th>
-                        <td id="modalId" class="mono"></td>
-                      </tr>
-                      <tr>
-                        <th class="bg-light">名称</th>
-                        <td id="modalName" class="fw-semibold"></td>
-                      </tr>
-                      <tr>
-                        <th class="bg-light">平台 / 分类</th>
-                        <td>
-                          <span id="modalProvider" class="badge bg-primary me-1"></span>
-                          <span id="modalCategory" class="badge bg-secondary"></span>
-                        </td>
-                      </tr>
-                      <tr>
-                        <th class="bg-light">规格</th>
-                        <td><span id="modalDimensions"></span> | <span id="modalSize"></span></td>
-                      </tr>
-                      <tr>
-                        <th class="bg-light">Task ID</th>
-                        <td id="modalTaskId" class="mono text-break"></td>
-                      </tr>
-                      <tr>
-                        <th class="bg-light">创建时间</th>
-                        <td id="modalCreatedAt" class="mono"></td>
-                      </tr>
-                      <tr>
-                        <th class="bg-light">URL 路径</th>
-                        <td class="text-break">
-                          <div class="d-flex align-items-center gap-1">
-                            <span id="modalUrl" class="mono small text-truncate" style="max-width: 170px;"></span>
-                            <button class="btn btn-outline-secondary btn-xs py-0 px-1" id="btnCopyUrl" title="复制链接">复制</button>
-                            <a id="modalLink" href="" target="_blank" class="btn btn-outline-primary btn-xs py-0 px-1">打开</a>
-                          </div>
-                        </td>
-                      </tr>
-                      <tr>
-                        <th class="bg-light">Prompt / 描述</th>
-                        <td id="modalPrompt" class="text-break" style="max-height: 120px; overflow-y: auto;"></td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-                <div class="mt-2" id="modalMetaBox" style="display: none;">
-                  <span class="small text-muted fw-semibold">拓展参数 (Meta JSON):</span>
-                  <pre id="modalMetaJson" class="p-2 bg-light border rounded small mono mb-0 mt-1" style="max-height: 120px; overflow-y: auto; font-size: 0.75rem;"></pre>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="modal-footer py-2">
-            <a id="btnDownloadAsset" href="" download class="btn btn-outline-success btn-sm">下载原图</a>
-            <button type="button" class="btn btn-danger btn-sm" id="btnDeleteCurrent">删除资产</button>
-            <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">关闭</button>
-          </div>
+          <pre id="drawerMetaJson" class="p-2 bg-light border rounded small mono mb-0" style="max-height: 180px; overflow-y: auto; font-size: 0.75rem;"></pre>
+        </div>
+
+        <!-- 底部危险操作 -->
+        <div class="border-top pt-3 mt-4 d-flex justify-content-between">
+          <a id="drawerBtnDownload" href="" download class="btn btn-outline-success btn-sm">下载原图</a>
+          <button type="button" class="btn btn-danger btn-sm" id="drawerBtnDelete">删除此资产</button>
         </div>
       </div>
     </div>
@@ -270,16 +426,18 @@
       setActiveNav("image_resources");
       document.getElementById("btnLogout").addEventListener("click", logout);
 
-      let limit = 48;
+      let limit = 36;
       let offset = 0;
       let total = 0;
       let currentProvider = "all";
       let currentCategory = "all";
       let currentQuery = "";
-      let currentViewingAsset = null;
+      let currentItems = [];
+      let currentDrawerAsset = null;
+      let viewMode = localStorage.getItem("image_resources_view_mode") || "grid";
 
-      const detailModal = new bootstrap.Modal(document.getElementById("detailModal"));
       const uploadModal = new bootstrap.Modal(document.getElementById("uploadModal"));
+      const assetDrawer = new bootstrap.Offcanvas(document.getElementById("assetDrawer"));
 
       const PROVIDER_COLORS = {
         gpt: "bg-success text-white",
@@ -301,6 +459,329 @@
         return (bytes / (1024 * 1024)).toFixed(2) + " MB";
       }
 
+      // 视图模式切换
+      function setViewMode(mode) {
+        viewMode = mode;
+        localStorage.setItem("image_resources_view_mode", mode);
+        const btnGrid = document.getElementById("btnViewGrid");
+        const btnTable = document.getElementById("btnViewTable");
+        const gridBox = document.getElementById("galleryViewBox");
+        const tableBox = document.getElementById("tableViewBox");
+
+        if (mode === "grid") {
+          btnGrid.classList.add("active");
+          btnTable.classList.remove("active");
+          gridBox.style.display = "block";
+          tableBox.style.display = "none";
+        } else {
+          btnTable.classList.add("active");
+          btnGrid.classList.remove("active");
+          gridBox.style.display = "none";
+          tableBox.style.display = "block";
+        }
+        renderView();
+      }
+
+      document.getElementById("btnViewGrid").addEventListener("click", () => setViewMode("grid"));
+      document.getElementById("btnViewTable").addEventListener("click", () => setViewMode("table"));
+
+      // 沉浸式 Lightbox 控制
+      function openLightbox(url, title = "") {
+        const lb = document.getElementById("lightboxOverlay");
+        const img = document.getElementById("lightboxImg");
+        const titleEl = document.getElementById("lightboxTitle");
+        const btnCopy = document.getElementById("lbBtnCopy");
+        const btnDownload = document.getElementById("lbBtnDownload");
+
+        img.src = url;
+        titleEl.textContent = title;
+        btnDownload.href = url;
+        btnCopy.onclick = () => {
+          navigator.clipboard.writeText(window.location.origin + url);
+          toast("直链已复制到剪贴板", "success");
+        };
+
+        lb.classList.add("active");
+      }
+
+      function closeLightbox() {
+        document.getElementById("lightboxOverlay").classList.remove("active");
+      }
+
+      document.getElementById("lbBtnClose").addEventListener("click", closeLightbox);
+      document.getElementById("lightboxOverlay").addEventListener("click", (e) => {
+        if (e.target.id === "lightboxOverlay") closeLightbox();
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeLightbox();
+      });
+
+      // 侧边参数详情抽屉展示
+      function openDrawer(asset) {
+        currentDrawerAsset = asset;
+        document.getElementById("drawerImg").src = asset.url || "";
+        document.getElementById("drawerImg").onclick = () => openLightbox(asset.url, asset.name);
+        document.getElementById("drawerId").textContent = asset.id || "";
+        document.getElementById("drawerName").textContent = asset.name || "";
+        document.getElementById("drawerProvider").textContent = (asset.provider || "UNKNOWN").toUpperCase();
+        document.getElementById("drawerProvider").className = `badge ${getProviderBadgeClass(asset.provider)} me-1`;
+        document.getElementById("drawerCategory").textContent = asset.category || "";
+        document.getElementById("drawerDimensions").textContent = (asset.width && asset.height) ? `${asset.width} × ${asset.height}` : "未指定规格";
+        document.getElementById("drawerSize").textContent = formatSize(asset.size_bytes);
+        document.getElementById("drawerTaskId").textContent = asset.task_id || "-";
+        document.getElementById("drawerCreatedAt").textContent = asset.created_at || "-";
+        document.getElementById("drawerUrl").textContent = asset.url || "";
+        document.getElementById("drawerLink").href = asset.url || "#";
+        document.getElementById("drawerBtnDownload").href = asset.url || "#";
+
+        let promptText = "-";
+        if (asset.meta_json && typeof asset.meta_json === "object") {
+          promptText = asset.meta_json.prompt || asset.meta_json.text || "-";
+        }
+        document.getElementById("drawerPrompt").textContent = promptText;
+
+        const metaSec = document.getElementById("drawerMetaSection");
+        const metaJson = document.getElementById("drawerMetaJson");
+        if (asset.meta_json && Object.keys(asset.meta_json).length > 0) {
+          metaSec.style.display = "block";
+          metaJson.textContent = JSON.stringify(asset.meta_json, null, 2);
+        } else {
+          metaSec.style.display = "none";
+        }
+
+        assetDrawer.show();
+      }
+
+      document.getElementById("drawerBtnCopyUrl").addEventListener("click", () => {
+        if (currentDrawerAsset) {
+          navigator.clipboard.writeText(window.location.origin + currentDrawerAsset.url);
+          toast("外链已复制到剪贴板", "success");
+        }
+      });
+
+      document.getElementById("drawerBtnCopyPrompt").addEventListener("click", () => {
+        const text = document.getElementById("drawerPrompt").textContent;
+        if (text && text !== "-") {
+          navigator.clipboard.writeText(text);
+          toast("Prompt 提示词已复制", "success");
+        }
+      });
+
+      document.getElementById("drawerBtnCopyMeta").addEventListener("click", () => {
+        if (currentDrawerAsset && currentDrawerAsset.meta_json) {
+          navigator.clipboard.writeText(JSON.stringify(currentDrawerAsset.meta_json, null, 2));
+          toast("参数 JSON 已复制", "success");
+        }
+      });
+
+      document.getElementById("drawerBtnDelete").addEventListener("click", async () => {
+        if (!currentDrawerAsset) return;
+        if (confirm(`确定要删除此资产 (ID: ${currentDrawerAsset.id}) 吗？`)) {
+          await deleteAsset(currentDrawerAsset.id);
+          assetDrawer.hide();
+        }
+      });
+
+      // 删除资产
+      async function deleteAsset(id) {
+        const r = await adminFetch(`/api/admin/image-resources/${id}`, { method: "DELETE" });
+        if (!r) return;
+        const d = await r.json();
+        if (r.ok && d.success) {
+          toast("删除成功", "success");
+          loadFilters();
+          loadItems();
+        } else {
+          toast(d.detail || "删除失败", "error");
+        }
+      }
+
+      // 渲染视图分流
+      function renderView() {
+        if (viewMode === "grid") {
+          renderGridCards(currentItems);
+        } else {
+          renderTableRows(currentItems);
+        }
+      }
+
+      // 渲染 1: 大气卡片画廊
+      function renderGridCards(items) {
+        const grid = document.getElementById("galleryGrid");
+        if (!items || items.length === 0) {
+          grid.innerHTML = `
+            <div class="col-12 text-center text-muted py-5">
+              <div class="fs-1 mb-2">🖼️</div>
+              <p>暂无符合条件的图片资产</p>
+            </div>
+          `;
+          return;
+        }
+
+        grid.innerHTML = items.map(item => {
+          const url = escapeHtml(item.url || "");
+          const name = escapeHtml(item.name || "未命名");
+          const provider = escapeHtml(item.provider || "unknown");
+          const category = escapeHtml(item.category || "generated");
+          const pBadge = getProviderBadgeClass(item.provider);
+          const sizeStr = formatSize(item.size_bytes);
+          const dimStr = (item.width && item.height) ? `${item.width}×${item.height}` : "";
+
+          let promptStr = "";
+          if (item.meta_json && typeof item.meta_json === "object") {
+            promptStr = item.meta_json.prompt || item.meta_json.text || "";
+          }
+
+          return `
+            <div class="col-12 col-sm-6 col-md-4 col-xl-3">
+              <div class="card gallery-card h-100 shadow-sm bg-white position-relative">
+                <div class="thumb-container">
+                  <img src="${url}" class="thumb-img" loading="lazy" alt="${name}" onerror="this.src='/favicon.ico'; this.style.opacity=0.3;" />
+                  
+                  <!-- 平台徽标固定在左上角 -->
+                  <span class="badge ${pBadge} position-absolute top-0 start-0 m-2 badge-provider shadow-sm">${provider.toUpperCase()}</span>
+                  
+                  <!-- 悬停快捷操作遮罩 -->
+                  <div class="card-hover-overlay">
+                    <button class="hover-action-btn" data-action="preview" data-id="${item.id}" title="大图沉浸查看">
+                      🔍
+                    </button>
+                    <button class="hover-action-btn" data-action="copy-url" data-id="${item.id}" title="复制直链">
+                      📋
+                    </button>
+                    <a class="hover-action-btn" href="${url}" download title="下载原图">
+                      ⬇️
+                    </a>
+                    <button class="hover-action-btn" data-action="drawer" data-id="${item.id}" title="参数详情">
+                      ℹ️
+                    </button>
+                    <button class="hover-action-btn btn-danger-hover" data-action="delete" data-id="${item.id}" title="删除">
+                      🗑️
+                    </button>
+                  </div>
+                </div>
+
+                <div class="card-body p-3 d-flex flex-column justify-content-between">
+                  <div>
+                    <div class="fw-bold text-dark text-truncate" title="${name}">${name}</div>
+                    ${promptStr ? `<div class="text-muted small text-truncate-2 mt-1" style="font-size: 0.78rem;" title="${escapeHtml(promptStr)}">${escapeHtml(promptStr)}</div>` : ''}
+                  </div>
+                  <div class="d-flex align-items-center justify-content-between mt-3 pt-2 border-top small text-muted" style="font-size: 0.75rem;">
+                    <span>${dimStr || sizeStr || category}</span>
+                    <span class="mono">${escapeHtml((item.created_at || '').substring(0, 16))}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join("");
+
+        bindActionEvents(grid);
+      }
+
+      // 渲染 2: 清晰数据表格
+      function renderTableRows(items) {
+        const tbody = document.getElementById("tableTbody");
+        if (!items || items.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="8" class="text-center text-muted py-5">暂无符合条件的图片资产</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = items.map(item => {
+          const url = escapeHtml(item.url || "");
+          const name = escapeHtml(item.name || "未命名");
+          const provider = escapeHtml(item.provider || "unknown");
+          const category = escapeHtml(item.category || "generated");
+          const pBadge = getProviderBadgeClass(item.provider);
+          const sizeStr = formatSize(item.size_bytes);
+          const dimStr = (item.width && item.height) ? `${item.width}×${item.height}` : "-";
+
+          let promptStr = "";
+          if (item.meta_json && typeof item.meta_json === "object") {
+            promptStr = item.meta_json.prompt || item.meta_json.text || "";
+          }
+
+          return `
+            <tr>
+              <td>
+                <img src="${url}" class="table-thumb" loading="lazy" data-action="preview" data-id="${item.id}" alt="${name}" title="点击查看大图" onerror="this.src='/favicon.ico';" />
+              </td>
+              <td>
+                <div class="fw-semibold text-truncate" style="max-width: 280px;" title="${name}">${name}</div>
+                ${promptStr ? `<div class="text-muted text-truncate" style="max-width: 280px; font-size: 0.75rem;" title="${escapeHtml(promptStr)}">${escapeHtml(promptStr)}</div>` : ''}
+              </td>
+              <td>
+                <span class="badge ${pBadge} badge-provider">${provider.toUpperCase()}</span>
+              </td>
+              <td>
+                <span class="badge bg-light text-dark border">${category}</span>
+              </td>
+              <td class="mono small">
+                <div>${dimStr}</div>
+                <div class="text-muted">${sizeStr}</div>
+              </td>
+              <td class="mono small text-break">
+                ${item.task_id ? `<span class="badge bg-secondary-subtle text-secondary border">${escapeHtml(String(item.task_id))}</span>` : '-'}
+              </td>
+              <td class="mono small text-muted">
+                ${escapeHtml(item.created_at || '')}
+              </td>
+              <td class="text-center">
+                <div class="btn-group btn-group-sm">
+                  <button class="btn btn-outline-primary btn-xs py-1 px-2" data-action="preview" data-id="${item.id}" title="大图预览">放大</button>
+                  <button class="btn btn-outline-secondary btn-xs py-1 px-2" data-action="copy-url" data-id="${item.id}" title="复制链接">复制</button>
+                  <button class="btn btn-outline-info btn-xs py-1 px-2" data-action="drawer" data-id="${item.id}" title="参数详情">参数</button>
+                  <a class="btn btn-outline-success btn-xs py-1 px-2" href="${url}" download title="下载原图">下载</a>
+                  <button class="btn btn-outline-danger btn-xs py-1 px-2" data-action="delete" data-id="${item.id}" title="删除">删</button>
+                </div>
+              </td>
+            </tr>
+          `;
+        }).join("");
+
+        bindActionEvents(tbody);
+      }
+
+      // 绑定视图事件
+      function bindActionEvents(container) {
+        container.querySelectorAll("[data-action='preview']").forEach(btn => {
+          btn.addEventListener("click", () => {
+            const id = Number(btn.getAttribute("data-id"));
+            const asset = currentItems.find(x => x.id === id);
+            if (asset) openLightbox(asset.url, asset.name);
+          });
+        });
+
+        container.querySelectorAll("[data-action='copy-url']").forEach(btn => {
+          btn.addEventListener("click", () => {
+            const id = Number(btn.getAttribute("data-id"));
+            const asset = currentItems.find(x => x.id === id);
+            if (asset) {
+              navigator.clipboard.writeText(window.location.origin + asset.url);
+              toast("直链已复制到剪贴板", "success");
+            }
+          });
+        });
+
+        container.querySelectorAll("[data-action='drawer']").forEach(btn => {
+          btn.addEventListener("click", () => {
+            const id = Number(btn.getAttribute("data-id"));
+            const asset = currentItems.find(x => x.id === id);
+            if (asset) openDrawer(asset);
+          });
+        });
+
+        container.querySelectorAll("[data-action='delete']").forEach(btn => {
+          btn.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const id = Number(btn.getAttribute("data-id"));
+            if (!confirm(`确定要删除此图片资产 (ID: ${id}) 吗？`)) return;
+            await deleteAsset(id);
+          });
+        });
+      }
+
+      // 过滤器动态加载
       async function loadFilters() {
         const r = await adminFetch("/api/admin/image-resources/filters");
         if (!r || !r.ok) return;
@@ -319,7 +800,6 @@
         });
         pBar.innerHTML = phtml;
 
-        // Bind clicks
         pBar.querySelectorAll(".filter-pill").forEach(el => {
           el.addEventListener("click", () => {
             currentProvider = el.getAttribute("data-provider") || "all";
@@ -350,124 +830,7 @@
         });
       }
 
-      function renderCards(items) {
-        const grid = document.getElementById("galleryGrid");
-        if (!items || items.length === 0) {
-          grid.innerHTML = `
-            <div class="col-12 text-center text-muted py-5">
-              <div class="fs-1 mb-2">🖼️</div>
-              <p>暂无符合条件的图片资产</p>
-            </div>
-          `;
-          return;
-        }
-
-        grid.innerHTML = items.map(item => {
-          const url = escapeHtml(item.url || "");
-          const name = escapeHtml(item.name || "未命名");
-          const provider = escapeHtml(item.provider || "unknown");
-          const category = escapeHtml(item.category || "generated");
-          const pBadge = getProviderBadgeClass(item.provider);
-          const sizeStr = formatSize(item.size_bytes);
-          const dimStr = (item.width && item.height) ? `${item.width}×${item.height}` : "";
-
-          let promptStr = "";
-          if (item.meta_json && typeof item.meta_json === "object") {
-            promptStr = item.meta_json.prompt || item.meta_json.text || "";
-          }
-
-          return `
-            <div class="col-6 col-sm-4 col-md-3 col-lg-2">
-              <div class="card gallery-card h-100 shadow-sm border-0 position-relative">
-                <div class="thumb-container" data-action="view" data-id="${item.id}">
-                  <img src="${url}" class="thumb-img" loading="lazy" alt="${name}" onerror="this.src='/favicon.ico'; this.style.opacity=0.3;" />
-                  <span class="badge ${pBadge} position-absolute top-0 start-0 m-2 badge-provider shadow-sm">${provider}</span>
-                </div>
-                <div class="card-body p-2 d-flex flex-column justify-content-between">
-                  <div>
-                    <div class="fw-semibold small text-truncate" title="${name}">${name}</div>
-                    ${promptStr ? `<div class="text-muted small text-truncate-2 mt-1" style="font-size: 0.75rem;" title="${escapeHtml(promptStr)}">${escapeHtml(promptStr)}</div>` : ''}
-                  </div>
-                  <div class="d-flex align-items-center justify-content-between mt-2 pt-2 border-top small text-muted" style="font-size: 0.72rem;">
-                    <span>${dimStr || sizeStr || category}</span>
-                    <div class="btn-group btn-group-sm">
-                      <button class="btn btn-outline-primary btn-xs py-0 px-1" data-action="view" data-id="${item.id}" title="查看详情">详情</button>
-                      <button class="btn btn-outline-danger btn-xs py-0 px-1" data-action="delete" data-id="${item.id}" title="删除">删</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          `;
-        }).join("");
-
-        // Bind click events on card elements
-        grid.querySelectorAll("[data-action='view']").forEach(btn => {
-          btn.addEventListener("click", () => {
-            const id = Number(btn.getAttribute("data-id"));
-            const asset = items.find(x => x.id === id);
-            if (asset) showDetail(asset);
-          });
-        });
-
-        grid.querySelectorAll("[data-action='delete']").forEach(btn => {
-          btn.addEventListener("click", async (e) => {
-            e.stopPropagation();
-            const id = Number(btn.getAttribute("data-id"));
-            if (!confirm(`确定要删除此图片资产 (ID: ${id}) 吗？`)) return;
-            await deleteAsset(id);
-          });
-        });
-      }
-
-      function showDetail(asset) {
-        currentViewingAsset = asset;
-        document.getElementById("modalPreviewImg").src = asset.url || "";
-        document.getElementById("modalId").textContent = asset.id || "";
-        document.getElementById("modalName").textContent = asset.name || "";
-        document.getElementById("modalProvider").textContent = (asset.provider || "UNKNOWN").toUpperCase();
-        document.getElementById("modalProvider").className = `badge ${getProviderBadgeClass(asset.provider)} me-1`;
-        document.getElementById("modalCategory").textContent = asset.category || "";
-        document.getElementById("modalDimensions").textContent = (asset.width && asset.height) ? `${asset.width} × ${asset.height}` : "未知尺寸";
-        document.getElementById("modalSize").textContent = formatSize(asset.size_bytes);
-        document.getElementById("modalTaskId").textContent = asset.task_id || "-";
-        document.getElementById("modalCreatedAt").textContent = asset.created_at || "-";
-        document.getElementById("modalUrl").textContent = asset.url || "";
-        document.getElementById("modalLink").href = asset.url || "#";
-        document.getElementById("btnDownloadAsset").href = asset.url || "#";
-
-        let promptText = "-";
-        if (asset.meta_json && typeof asset.meta_json === "object") {
-          promptText = asset.meta_json.prompt || asset.meta_json.text || "-";
-        }
-        document.getElementById("modalPrompt").textContent = promptText;
-
-        const metaBox = document.getElementById("modalMetaBox");
-        const metaJson = document.getElementById("modalMetaJson");
-        if (asset.meta_json && Object.keys(asset.meta_json).length > 0) {
-          metaBox.style.display = "block";
-          metaJson.textContent = JSON.stringify(asset.meta_json, null, 2);
-        } else {
-          metaBox.style.display = "none";
-        }
-
-        detailModal.show();
-      }
-
-      async function deleteAsset(id) {
-        const r = await adminFetch(`/api/admin/image-resources/${id}`, { method: "DELETE" });
-        if (!r) return;
-        const d = await r.json();
-        if (r.ok && d.success) {
-          toast("删除成功", "success");
-          detailModal.hide();
-          loadFilters();
-          loadItems();
-        } else {
-          toast(d.detail || "删除失败", "error");
-        }
-      }
-
+      // 数据加载
       async function loadItems() {
         let url = `/api/admin/image-resources?limit=${limit}&offset=${offset}`;
         if (currentProvider && currentProvider !== "all") {
@@ -490,8 +853,8 @@
 
         total = Number(d.total || 0);
         document.getElementById("totalBadge").textContent = total;
-        const items = Array.isArray(d.items) ? d.items : [];
-        renderCards(items);
+        currentItems = Array.isArray(d.items) ? d.items : [];
+        renderView();
 
         const start = total ? offset + 1 : 0;
         const end = Math.min(total, offset + limit);
@@ -500,7 +863,7 @@
         document.getElementById("btnNext").disabled = offset + limit >= total;
       }
 
-      // UI Bindings
+      // UI 检索绑定
       document.getElementById("btnRefresh").addEventListener("click", () => {
         loadFilters();
         loadItems();
@@ -539,22 +902,7 @@
         }
       });
 
-      document.getElementById("btnCopyUrl").addEventListener("click", () => {
-        const url = document.getElementById("modalUrl").textContent;
-        if (url) {
-          navigator.clipboard.writeText(window.location.origin + url);
-          toast("链接已复制到剪贴板", "success");
-        }
-      });
-
-      document.getElementById("btnDeleteCurrent").addEventListener("click", async () => {
-        if (!currentViewingAsset) return;
-        if (confirm(`确定删除资产 ID: ${currentViewingAsset.id} 吗？`)) {
-          await deleteAsset(currentViewingAsset.id);
-        }
-      });
-
-      // Upload Handling
+      // 上传素材
       document.getElementById("btnUploadModal").addEventListener("click", () => {
         document.getElementById("uploadForm").reset();
         uploadModal.show();
@@ -600,7 +948,8 @@
         }
       });
 
-      // Initial load
+      // 初始化
+      setViewMode(viewMode);
       loadFilters();
       loadItems();
     </script>
