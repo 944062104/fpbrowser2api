@@ -87,6 +87,7 @@ const PAGE_PATHS = {
   projects: "/admin/projects",
   task_types: "/admin/task-types",
     tasks: "/admin/tasks",
+  chat: "/admin/chat",
     watermark_tasks: "/admin/watermark-tasks",
     test: "/admin/test",
     image_resources: "/admin/image-resources",
@@ -98,6 +99,19 @@ const PAGE_PATHS = {
 function ensureAdminNavLinks() {
   const nav = document.querySelector(".navbar-nav");
   if (!nav || nav.querySelector('[data-nav="watermark_tasks"]')) return;
+  if (!nav.querySelector('[data-nav="chat"]')) {
+    const aChat = document.createElement("a");
+    aChat.className = "nav-link";
+    aChat.dataset.nav = "chat";
+    aChat.href = "/admin/chat";
+    aChat.textContent = "ChatGPT对话";
+    const tasks = nav.querySelector('[data-nav="tasks"]');
+    if (tasks && tasks.parentElement === nav) {
+      tasks.insertAdjacentElement("afterend", aChat);
+    } else {
+      nav.appendChild(aChat);
+    }
+  }
   const a = document.createElement("a");
   a.className = "nav-link";
   a.dataset.nav = "watermark_tasks";

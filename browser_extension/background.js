@@ -546,6 +546,10 @@ async function runTask(msg) {
       await pushLog("debug", "task.progress", { task_id: taskId, progress, data });
       await send({ type: "task.progress", task_id: taskId, progress, data });
     },
+    chunk: async (delta) => {
+      if (!delta) return;
+      await send({ type: "task.chunk", task_id: taskId, delta: String(delta) });
+    },
     setGptBusyTab: async (tabId) => {
       if (!tabId) return;
       gptBusyTabs.add(tabId);
@@ -1663,6 +1667,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (type === "fpb.networkCapture.event") {
       const out = await handleNetworkRuntimeMessage(message, sender);
       sendResponse(out || { ok: true });
+      return;
+    }
+    if (type === "content.fpbChatChunk") {
+      const tId = message.task_id;
+      const delta = message.delta;
+      if (tId && delta) {
+        send({ type: "task.chunk", task_id: tId, delta: String(delta) }).catch(() => {});
+      }
+      sendResponse({ ok: true });
       return;
     }
     if (type === "content.fpbConfig") {

@@ -35,7 +35,10 @@ def kill_proc_tree(proc: psutil.Process) -> None:
         pass
 
 
-def stop_port_listeners(ports=(9000, 8000)) -> int:
+ALL_SERVICE_PORTS = (9000, 8000, 40001, 40002, 40003, 40004, 40005)
+
+
+def stop_port_listeners(ports=ALL_SERVICE_PORTS) -> int:
     """按监听端口寻找并停止服务进程"""
     stopped_count = 0
     killed_pids = set()
@@ -73,17 +76,17 @@ def stop_port_listeners(ports=(9000, 8000)) -> int:
 
 def main():
     print("=" * 60)
-    print("  🛑 正在停止 VirtualBrowser & FPBrowser2API 服务 (跨平台纯 Python)...")
+    print("  🛑 正在停止全套 AI 号池服务 (VB + 网关 + SSH WARP 代理桥)...")
     print("=" * 60)
 
-    count = stop_port_listeners(ports=(9000, 8000))
+    count = stop_port_listeners(ports=ALL_SERVICE_PORTS)
     time.sleep(0.5)
 
     print("=" * 60)
     if count > 0:
         print(f"  ✅ 服务已成功停止 (共处理 {count} 个相关进程)。")
     else:
-        print("  ℹ️ 未检测到运行中的 9000/8000 端口服务。")
+        print("  ℹ️ 未检测到运行中的相关服务端口 (9000/8000/40001~40005)。")
     print("=" * 60)
 
 

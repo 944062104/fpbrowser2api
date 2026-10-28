@@ -1686,6 +1686,118 @@ function appendRatioHint(prompt, p) {
   return out;
 }
 
+
+async function pageStreamFetch(tabId, taskId, url, { method = "GET", headers = {}, body = null } = {}) {
+  // 注入轻量桥接监听器，确保当前标签页能可靠将流式分块转发给 background.js
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        if (window.__fpb_chat_bridge_injected__) return;
+        window.__fpb_chat_bridge_injected__ = true;
+        window.addEventListener("message", (event) => {
+          if (event.source !== window || !event.data) return;
+          if (event.data.type === "__fpb_chat_chunk__") {
+            try {
+              chrome.runtime.sendMessage({
+                type: "content.fpbChatChunk",
+                task_id: event.data.task_id,
+                delta: event.data.delta,
+              });
+            } catch (_) {}
+          }
+        });
+      }
+    });
+  } catch (_) {}
+
+  const frames = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    args: [taskId, url, { method, headers, body }],
+    func: async (tId, u, opts) => {
+      try {
+        const init = { method: opts.method || "GET", headers: opts.headers || {}, credentials: "include" };
+        if (opts.body !== null && opts.body !== undefined) init.body = JSON.stringify(opts.body);
+        const r = await fetch(u, init);
+        if (!r.ok || !r.body) {
+          const text = await r.text();
+          let json = null; try { json = JSON.parse(text); } catch (_) {}
+          return { ok: false, status: r.status, text, json };
+        }
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let fullText = "";
+        let buffer = "";
+        let lastLen = 0;
+        let streamCompleted = false;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunkStr = decoder.decode(value, { stream: true });
+          fullText += chunkStr;
+          buffer += chunkStr;
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) continue;
+            const dataStr = trimmed.slice(5).trim();
+            if (dataStr === "[DONE]") {
+              streamCompleted = true;
+              break;
+            }
+            try {
+              const obj = JSON.parse(dataStr);
+              if (obj.type === "message_stream_complete") {
+                streamCompleted = true;
+                break;
+              }
+              // 1. 处理全量 message 对象的 parts 增量
+              const msg = obj.message;
+              if (msg && typeof msg === "object") {
+                const role = String((msg.author && msg.author.role) || msg.role || "").toLowerCase();
+                if (role === "assistant" || !role) {
+                  const parts = msg.content && Array.isArray(msg.content.parts) ? msg.content.parts : [];
+                  const full = parts.filter(x => typeof x === "string").join("");
+                  if (full && full.length > lastLen) {
+                    const delta = full.slice(lastLen);
+                    lastLen = full.length;
+                    window.postMessage({ type: "__fpb_chat_chunk__", task_id: tId, delta: delta }, "*");
+                  }
+                }
+              }
+              // 2. 处理 patch (v) 形式的增量
+              const ops = Array.isArray(obj.v) ? obj.v : [obj];
+              for (const op of ops) {
+                if (!op || typeof op !== "object") continue;
+                const opP = String(op.p || op.path || "");
+                if (opP.includes("/message/content/parts") && typeof op.v === "string") {
+                  if (op.o === "append") {
+                    window.postMessage({ type: "__fpb_chat_chunk__", task_id: tId, delta: op.v }, "*");
+                  } else if (op.v.length > lastLen) {
+                    const delta = op.v.slice(lastLen);
+                    lastLen = op.v.length;
+                    window.postMessage({ type: "__fpb_chat_chunk__", task_id: tId, delta: delta }, "*");
+                  }
+                }
+              }
+            } catch (_) {}
+          }
+          if (streamCompleted) {
+            try { await reader.cancel(); } catch (_) {}
+            break;
+          }
+        }
+        return { ok: true, status: r.status, text: fullText };
+      } catch (err) {
+        return { ok: false, error: String(err && err.message || err || "stream fetch error") };
+      }
+    }
+  });
+  return Array.isArray(frames) && frames[0] ? frames[0].result : null;
+}
+
 async function startConversation(tabId, token, reqs, conduit, payload, kind, refs) {
   const isChat = kind === "chat" || kind === "text";
   const model = normalizeWebModel(payload, kind);
@@ -1728,7 +1840,10 @@ async function startConversation(tabId, token, reqs, conduit, payload, kind, ref
     body.conversation_id = conversationId;
   }
   const headers = withRequirementHeaders(gptHeaders(token, path, "text/event-stream"), reqs, conduit);
-  const r = await pageFetch(tabId, CHATGPT + path, { method: "POST", headers, body });
+  const taskId = String(payload.task_id || payload._bridge_task_id || "").trim();
+  const r = (isChat && taskId)
+    ? await pageStreamFetch(tabId, taskId, CHATGPT + path, { method: "POST", headers, body })
+    : await pageFetch(tabId, CHATGPT + path, { method: "POST", headers, body });
   if (!r || r.status >= 400) throw new Error(`conversation failed HTTP ${r && r.status}: ${(r && r.text || "").slice(0, 600)}`);
   throwIfTooManyRequests(r.json || r.text, `GPT ${kind}`);
   const got = extractAssets(r.text);

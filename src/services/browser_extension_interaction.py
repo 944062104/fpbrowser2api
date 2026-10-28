@@ -160,6 +160,7 @@ async def submit_extension_task(
     payload: Dict[str, Any],
     progress_cb: ProgressCB,
     timeout_seconds: float,
+    chunk_cb: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """向已连接的浏览器插件派发任务并等待结果。"""
     client = await get_extension_client(space_id, window_key)
@@ -174,6 +175,8 @@ async def submit_extension_task(
     fut: asyncio.Future = loop.create_future()
     client.pending[task_id] = fut
     client.progress_cbs[task_id] = progress_cb
+    if chunk_cb is not None:
+        client.chunk_cbs[task_id] = chunk_cb
     msg = {
         "type": "task.start",
         "task_id": task_id,
@@ -195,6 +198,8 @@ async def submit_extension_task(
     finally:
         client.pending.pop(task_id, None)
         client.progress_cbs.pop(task_id, None)
+        if hasattr(client, "chunk_cbs"):
+            client.chunk_cbs.pop(task_id, None)
 
 
 async def _bring_launcher_page_to_front(

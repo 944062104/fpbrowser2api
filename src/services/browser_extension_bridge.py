@@ -35,12 +35,29 @@ class ExtensionClient:
     last_seen_at: float = field(default_factory=time.time)
     pending: Dict[str, asyncio.Future] = field(default_factory=dict)
     progress_cbs: Dict[str, ProgressCB] = field(default_factory=dict)
+    chunk_cbs: Dict[str, Any] = field(default_factory=dict)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     @property
     def key(self) -> str:
         return _client_key(self.space_id, self.window_key)
 
+
+
+_task_chunk_queues: Dict[str, asyncio.Queue] = {}
+
+def register_task_chunk_queue(task_id: str) -> asyncio.Queue:
+    q = asyncio.Queue()
+    _task_chunk_queues[task_id] = q
+    return q
+
+def unregister_task_chunk_queue(task_id: str) -> None:
+    _task_chunk_queues.pop(task_id, None)
+
+def dispatch_task_chunk(task_id: str, delta: str) -> None:
+    q = _task_chunk_queues.get(task_id)
+    if q is not None:
+        q.put_nowait(delta)
 
 _clients: Dict[str, ExtensionClient] = {}
 _clients_by_id: Dict[str, ExtensionClient] = {}
@@ -247,6 +264,20 @@ async def _handle_client_message(client: ExtensionClient, msg: Dict[str, Any]) -
                 await cb(int(msg.get("progress") or 0), dict(msg.get("data") or {}))
             except Exception:
                 logger.exception("extension progress callback failed task=%s", task_id)
+        return
+
+    if typ == "task.chunk":
+        delta = str(msg.get("delta") or "")
+        dispatch_task_chunk(task_id, delta)
+        cb = getattr(client, "chunk_cbs", {}).get(task_id)
+        if cb:
+            try:
+                delta = str(msg.get("delta") or "")
+                res = cb(delta)
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception:
+                logger.exception("extension chunk callback failed task=%s", task_id)
         return
 
     fut = client.pending.get(task_id)

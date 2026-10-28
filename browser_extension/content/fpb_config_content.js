@@ -71,4 +71,20 @@
       }
     }
   } catch (_) {}
+
+  // 监听来自页面的流式对话分块并转交给 background.js
+  try {
+    window.addEventListener("message", (event) => {
+      if (event.source !== window || !event.data) return;
+      if (event.data.type === "__fpb_chat_chunk__") {
+        try {
+          chrome.runtime.sendMessage({
+            type: "content.fpbChatChunk",
+            task_id: event.data.task_id,
+            delta: event.data.delta,
+          });
+        } catch (_) {}
+      }
+    });
+  } catch (_) {}
 })();

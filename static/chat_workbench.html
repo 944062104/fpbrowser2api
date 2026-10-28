@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ChatGPT 对话工作台 - FPBrowser2API</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="/assets/admin-nav.css" rel="stylesheet" />
+    <link href="/assets/admin-theme.css" rel="stylesheet" />
+    <style>
+      .chat-box {
+        min-height: 480px;
+        max-height: 650px;
+        overflow-y: auto;
+        background: #fdfdfd;
+        border: 1px solid #e9ecef;
+        border-radius: 8px;
+        padding: 16px;
+      }
+      .msg-item {
+        margin-bottom: 16px;
+        display: flex;
+        flex-direction: column;
+      }
+      .msg-user {
+        align-self: flex-end;
+        background-color: #0d6efd;
+        color: #fff;
+        padding: 10px 16px;
+        border-radius: 16px 16px 2px 16px;
+        max-width: 80%;
+      }
+      .msg-assistant {
+        align-self: flex-start;
+        background-color: #f1f3f5;
+        color: #212529;
+        padding: 12px 18px;
+        border-radius: 16px 16px 16px 2px;
+        max-width: 85%;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 0.95rem;
+        line-height: 1.6;
+      }
+      .typing-cursor::after {
+        content: "▋";
+        display: inline-block;
+        vertical-align: baseline;
+        animation: blink 1s infinite;
+        color: #0d6efd;
+      }
+      @keyframes blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0; }
+      }
+    </style>
+  </head>
+  <body class="bg-light">
+    <div id="toastContainer" class="toast-container position-fixed bottom-0 end-0 p-3"></div>
+
+    <nav class="navbar navbar-dark bg-dark admin-top-nav">
+      <div class="container-fluid">
+        <a class="navbar-brand" href="/admin/system">Mirr矩阵</a>
+        <div class="navbar-nav me-auto">
+          <a class="nav-link" data-nav="system" href="/admin/system">系统配置</a>
+          <a class="nav-link" data-nav="projects" href="/admin/projects">项目管理</a>
+          <a class="nav-link" data-nav="task_types" href="/admin/task-types">任务类型管理</a>
+          <a class="nav-link" data-nav="tasks" href="/admin/tasks">任务列表</a>
+          <a class="nav-link active" data-nav="chat" href="/admin/chat">ChatGPT对话</a>
+          <a class="nav-link" data-nav="test" href="/admin/test">测试</a>
+          <a class="nav-link" data-nav="image_resources" href="/admin/image-resources">图片资源</a>
+          <a class="nav-link" data-nav="totp" href="/admin/totp">2FA生成</a>
+          <a class="nav-link" data-nav="logs" href="/admin/logs">请求日志</a>
+          <a class="nav-link" data-nav="users" href="/admin/users">用户管理</a>
+        </div>
+        <span class="navbar-text text-light small font-monospace me-3" data-role="navbarClock" title="当前时间"></span>
+        <button class="btn btn-outline-light btn-sm" id="btnLogout">退出</button>
+      </div>
+    </nav>
+
+    <div class="container py-4">
+      <div class="d-flex align-items-center mb-3">
+        <div>
+          <h4 class="mb-0">ChatGPT 原生对话工作台</h4>
+          <div class="text-muted small">独立任务链路 (gpt_chat) | 原生 SSE 实时流式打字机</div>
+        </div>
+        <div class="ms-auto d-flex gap-2">
+          <button class="btn btn-outline-secondary btn-sm" id="btnClearChat">清空会话</button>
+          <a class="btn btn-outline-primary btn-sm" href="/admin/tasks?type=gpt_chat">查看对话任务</a>
+        </div>
+      </div>
+
+      <div class="row g-3">
+        <!-- 会话主窗口 -->
+        <div class="col-lg-8">
+          <div class="card shadow-sm mb-3">
+            <div class="card-body p-0">
+              <div id="chatBox" class="chat-box">
+                <div class="text-center text-muted my-5" id="emptyHint">
+                  <div class="fs-4 mb-2">💬</div>
+                  <div>在下方输入提示词，直接调用账号池开展流式对话</div>
+                </div>
+              </div>
+            </div>
+            <div class="card-footer bg-white border-top-0 pt-0 pb-3">
+              <div class="input-group">
+                <textarea id="promptInput" class="form-control" rows="2" placeholder="输入对话内容，按 Ctrl+Enter 发送..."></textarea>
+                <button class="btn btn-primary px-4" id="btnSend">
+                  <span id="btnSendText">发 送</span>
+                  <span id="btnSendSpin" class="spinner-border spinner-border-sm d-none"></span>
+                </button>
+              </div>
+              <div class="d-flex justify-content-between align-items-center mt-2 px-1">
+                <div class="small text-muted" id="statBadge">准备就绪</div>
+                <div class="form-check form-switch mb-0">
+                  <input class="form-check-input" type="checkbox" id="streamToggle" checked>
+                  <label class="form-check-label small" for="streamToggle">实时流式推送 (Stream)</label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 调度与参数控制面板 -->
+        <div class="col-lg-4">
+          <div class="card shadow-sm mb-3">
+            <div class="card-header bg-white fw-bold">调用配置</div>
+            <div class="card-body">
+              <div class="mb-3">
+                <label class="form-label small fw-semibold">API Key（认证密钥）</label>
+                <input class="form-control form-control-sm font-monospace" id="apiKeyInput" placeholder="正在加载系统配置..." />
+              </div>
+              <div class="mb-3">
+                <label class="form-label small fw-semibold">模型</label>
+                <select class="form-select form-select-sm" id="modelSelect">
+                  <option value="auto" selected>auto (ChatGPT 默认推荐)</option>
+                  <option value="gpt-4o">gpt-4o</option>
+                  <option value="gpt-4o-mini">gpt-4o-mini</option>
+                  <option value="chatgpt-free">chatgpt-free</option>
+                </select>
+              </div>
+              <div class="mb-3">
+                <label class="form-label small fw-semibold">指定窗口（可选）</label>
+                <input class="form-control form-control-sm" id="windowPkInput" placeholder="留空走账号池最优自动调度" />
+                <div class="form-text">如需测试指定 Worker，输入其 Window PK。</div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label small fw-semibold">多轮 Conversation ID</label>
+                <input class="form-control form-control-sm font-monospace" id="convIdInput" placeholder="自动延续或留空开启新会话" />
+              </div>
+            </div>
+          </div>
+
+          <div class="card shadow-sm">
+            <div class="card-header bg-white fw-bold">实时指标</div>
+            <div class="card-body small">
+              <div class="d-flex justify-content-between mb-2">
+                <span class="text-muted">首字延迟 (TTFT):</span>
+                <span class="fw-bold font-monospace" id="valTtft">-</span>
+              </div>
+              <div class="d-flex justify-content-between mb-2">
+                <span class="text-muted">总耗时:</span>
+                <span class="fw-bold font-monospace" id="valDuration">-</span>
+              </div>
+              <div class="d-flex justify-content-between mb-2">
+                <span class="text-muted">生成字数:</span>
+                <span class="fw-bold font-monospace" id="valLength">0 字符</span>
+              </div>
+              <div class="d-flex justify-content-between">
+                <span class="text-muted">活跃任务 ID:</span>
+                <span class="font-monospace text-truncate ms-2" id="valTaskId" style="max-width: 140px;">-</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script type="module">
+      import { adminFetch, toast, setActiveNav, logout, initAdminPage } from "/assets/app.js";
+
+      initAdminPage("chat");
+      setActiveNav("chat");
+      document.getElementById("btnLogout")?.addEventListener("click", logout);
+
+      const chatBox = document.getElementById("chatBox");
+      const emptyHint = document.getElementById("emptyHint");
+      const promptInput = document.getElementById("promptInput");
+      const btnSend = document.getElementById("btnSend");
+      const btnSendText = document.getElementById("btnSendText");
+      const btnSendSpin = document.getElementById("btnSendSpin");
+      const modelSelect = document.getElementById("modelSelect");
+      const apiKeyInput = document.getElementById("apiKeyInput");
+      const windowPkInput = document.getElementById("windowPkInput");
+      const convIdInput = document.getElementById("convIdInput");
+      const streamToggle = document.getElementById("streamToggle");
+      const btnClearChat = document.getElementById("btnClearChat");
+
+      const valTtft = document.getElementById("valTtft");
+      const valDuration = document.getElementById("valDuration");
+      const valLength = document.getElementById("valLength");
+      const valTaskId = document.getElementById("valTaskId");
+      const statBadge = document.getElementById("statBadge");
+
+      let isGenerating = false;
+      let cachedApiKey = "";
+
+      // 自动从系统配置读取 API Key
+      async function loadApiKey() {
+        try {
+          const r = await adminFetch("/api/admin/system-config");
+          if (r && r.ok) {
+            const d = await r.json();
+            cachedApiKey = d.config?.api_key || "";
+            if (cachedApiKey) {
+              apiKeyInput.value = cachedApiKey;
+            }
+          }
+        } catch (_) {}
+        if (!apiKeyInput.value) {
+          apiKeyInput.placeholder = "mirrmart_sora2_880315";
+        }
+      }
+      loadApiKey();
+
+      function setGenerating(flag) {
+        isGenerating = flag;
+        promptInput.disabled = flag;
+        btnSend.disabled = flag;
+        if (flag) {
+          btnSendText.classList.add("d-none");
+          btnSendSpin.classList.remove("d-none");
+        } else {
+          btnSendText.classList.remove("d-none");
+          btnSendSpin.classList.add("d-none");
+        }
+      }
+
+      btnClearChat.addEventListener("click", () => {
+        chatBox.innerHTML = '';
+        chatBox.appendChild(emptyHint);
+        emptyHint.classList.remove("d-none");
+        convIdInput.value = '';
+        valTtft.textContent = '-';
+        valDuration.textContent = '-';
+        valLength.textContent = '0 字符';
+        valTaskId.textContent = '-';
+        statBadge.textContent = '已清空';
+      });
+
+      promptInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          sendPrompt();
+        }
+      });
+
+      btnSend.addEventListener("click", sendPrompt);
+
+      async function sendPrompt() {
+        const prompt = promptInput.value.trim();
+        if (!prompt || isGenerating) return;
+
+        const effectiveKey = apiKeyInput.value.trim() || cachedApiKey || "mirrmart_sora2_880315";
+
+        emptyHint.classList.add("d-none");
+        promptInput.value = "";
+
+        // 渲染用户消息
+        const userMsgDiv = document.createElement("div");
+        userMsgDiv.className = "msg-item";
+        userMsgDiv.innerHTML = `<div class="msg-user">${prompt}</div>`;
+        chatBox.appendChild(userMsgDiv);
+
+        // 渲染 Assistant 回复占位
+        const assistMsgDiv = document.createElement("div");
+        assistMsgDiv.className = "msg-item";
+        const bubble = document.createElement("div");
+        bubble.className = "msg-assistant typing-cursor";
+        bubble.textContent = "";
+        assistMsgDiv.appendChild(bubble);
+        chatBox.appendChild(assistMsgDiv);
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        setGenerating(true);
+        statBadge.textContent = "正在调度 Worker 并建立连接...";
+
+        const model = modelSelect.value || "auto";
+        const wpk = windowPkInput.value.trim() ? parseInt(windowPkInput.value.trim()) : null;
+        const convId = convIdInput.value.trim() || undefined;
+        const isStream = streamToggle.checked;
+
+        const startTime = performance.now();
+        let firstChunkTime = null;
+        let replyContent = "";
+
+        try {
+          const reqBody = {
+            model,
+            messages: [{ role: "user", content: prompt }],
+            stream: isStream,
+            conversation_id: convId,
+          };
+          if (wpk) reqBody.window_pk = wpk;
+
+          const res = await fetch("/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${effectiveKey}`
+            },
+            body: JSON.stringify(reqBody),
+          });
+
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail ? (typeof err.detail === "object" ? JSON.stringify(err.detail) : err.detail) : `HTTP ${res.status}`);
+          }
+
+          if (!isStream) {
+            const data = await res.json();
+            const dur = ((performance.now() - startTime) / 1000).toFixed(2);
+            valDuration.textContent = `${dur}s`;
+            valTtft.textContent = `${dur}s`;
+            bubble.classList.remove("typing-cursor");
+            replyContent = data.choices?.[0]?.message?.content || "";
+            bubble.textContent = replyContent;
+            valLength.textContent = `${replyContent.length} 字符`;
+            if (data.id) valTaskId.textContent = data.id;
+            if (data.conversation_id) convIdInput.value = data.conversation_id;
+            statBadge.textContent = "生成完成";
+            setGenerating(false);
+            return;
+          }
+
+          // 流式处理
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let sseBuffer = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunkStr = decoder.decode(value, { stream: true });
+            sseBuffer += chunkStr;
+            const lines = sseBuffer.split("\n");
+            sseBuffer = lines.pop() || "";
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith("data:")) continue;
+              const payloadStr = trimmed.slice(5).trim();
+              if (payloadStr === "[DONE]") break;
+
+              try {
+                const chunkObj = JSON.parse(payloadStr);
+                if (chunkObj.id) valTaskId.textContent = chunkObj.id;
+                const delta = chunkObj.choices?.[0]?.delta?.content;
+                if (delta) {
+                  if (firstChunkTime === null) {
+                    firstChunkTime = ((performance.now() - startTime) / 1000).toFixed(2);
+                    valTtft.textContent = `${firstChunkTime}s`;
+                    statBadge.textContent = "正在实时流式传输...";
+                  }
+                  replyContent += delta;
+                  bubble.textContent = replyContent;
+                  valLength.textContent = `${replyContent.length} 字符`;
+                  chatBox.scrollTop = chatBox.scrollHeight;
+                }
+                if (chunkObj.error) {
+                  throw new Error(chunkObj.error.message || "流式生成出错");
+                }
+              } catch (e) {
+                if (e.message && e.message.includes("流式生成出错")) throw e;
+              }
+            }
+          }
+
+          bubble.classList.remove("typing-cursor");
+          const totalDur = ((performance.now() - startTime) / 1000).toFixed(2);
+          valDuration.textContent = `${totalDur}s`;
+          statBadge.textContent = "生成完成";
+
+        } catch (err) {
+          bubble.classList.remove("typing-cursor");
+          bubble.classList.add("text-danger");
+          bubble.textContent = `❌ 出错: ${err.message}`;
+          statBadge.textContent = "请求失败";
+        } finally {
+          setGenerating(false);
+        }
+      }
+    </script>
+  </body>
+</html>
